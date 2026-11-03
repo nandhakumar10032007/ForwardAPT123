@@ -2,11 +2,10 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-class QuestionDetailedViewScreen extends StatefulWidget {
-  /// Firestore document ID, e.g. question_1.
-  final String questionId;
+import '../services/answer_submission_service.dart';
 
-  /// Optional question details passed from the homepage.
+class QuestionDetailedViewScreen extends StatefulWidget {
+  final String questionId;
   final int? questionNo;
   final String? title;
   final String? question;
@@ -36,11 +35,20 @@ class _QuestionDetailedViewScreenState
   static const Color _background = Color(0xFFF7F8FC);
   static const Color _text = Color(0xFF171923);
   static const Color _muted = Color(0xFF777A87);
+  static const Color _error = Color(0xFFDC2626);
 
   final TextEditingController _answerController =
       TextEditingController();
 
   final FocusNode _answerFocusNode = FocusNode();
+
+  final AnswerSubmissionService _answerService =
+      AnswerSubmissionService();
+
+  bool _isSubmitting = false;
+  bool _isAnswerInvalid = false;
+
+  String _answerLabel = 'Enter your answer';
 
   User? get _user => FirebaseAuth.instance.currentUser;
 
@@ -73,67 +81,334 @@ class _QuestionDetailedViewScreenState
   // ============================================================
 
   void _insertSymbol(String symbol) {
-    final text = _answerController.text;
-    final selection = _answerController.selection;
+    if (_isSubmitting) return;
 
-    final start = selection.isValid ? selection.start : text.length;
-    final end = selection.isValid ? selection.end : text.length;
+    final currentText = _answerController.text;
 
-    final newText = text.replaceRange(start, end, symbol);
-    final newOffset = start + symbol.length;
+    // Always append the new character.
+    // This prevents previous characters from being replaced.
+    final actualSymbol = symbol == '−' ? '-' : symbol;
+
+    final newText = currentText + actualSymbol;
 
     _answerController.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(offset: newOffset),
+      selection: TextSelection.collapsed(
+        offset: newText.length,
+      ),
+      composing: TextRange.empty,
     );
 
-    setState(() {});
+    _resetAnswerLabel();
 
-    // Keep the cursor visible while using the custom keyboard.
     _answerFocusNode.requestFocus();
+
+    setState(() {});
   }
 
   void _backspace() {
-    final text = _answerController.text;
-    final selection = _answerController.selection;
+    if (_isSubmitting) return;
 
-    if (text.isEmpty) return;
+    final currentText = _answerController.text;
 
-    final start = selection.isValid ? selection.start : text.length;
-    final end = selection.isValid ? selection.end : text.length;
+    if (currentText.isEmpty) return;
 
-    String newText;
-    int newOffset;
-
-    if (start != end) {
-      // Delete the selected text.
-      newText = text.replaceRange(start, end, '');
-      newOffset = start;
-    } else if (start > 0) {
-      // Delete the character immediately before the cursor.
-      newText = text.replaceRange(start - 1, start, '');
-      newOffset = start - 1;
-    } else {
-      return;
-    }
+    // Remove only the last character.
+    final newText = currentText.substring(
+      0,
+      currentText.length - 1,
+    );
 
     _answerController.value = TextEditingValue(
       text: newText,
-      selection: TextSelection.collapsed(offset: newOffset),
+      selection: TextSelection.collapsed(
+        offset: newText.length,
+      ),
+      composing: TextRange.empty,
     );
 
-    setState(() {});
+    _resetAnswerLabel();
+
     _answerFocusNode.requestFocus();
+
+    setState(() {});
   }
 
   void _clearAnswer() {
-    _answerController.clear();
+    if (_isSubmitting) return;
 
-    _answerController.selection =
-        const TextSelection.collapsed(offset: 0);
+    _answerController.value = const TextEditingValue(
+      text: '',
+      selection: TextSelection.collapsed(offset: 0),
+    );
+
+    _resetAnswerLabel();
+
+    _answerFocusNode.requestFocus();
 
     setState(() {});
-    _answerFocusNode.requestFocus();
+  }
+
+  void _resetAnswerLabel() {
+    if (!mounted) return;
+
+    setState(() {
+      _isAnswerInvalid = false;
+      _answerLabel = 'Enter your answer';
+    });
+  }
+
+  // ============================================================
+  // ANSWER SUBMISSION
+  // ============================================================
+
+  Future<void> _submitAnswer() async {
+    if (_isSubmitting) return;
+
+    final submittedAnswer = _answerController.text.trim();
+
+    if (submittedAnswer.isEmpty) {
+      setState(() {
+        _isAnswerInvalid = true;
+        _answerLabel =
+            'Invalid answer. Please enter the answer in the correct format.';
+      });
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+
+    setState(() {
+      _isSubmitting = true;
+      _isAnswerInvalid = false;
+      _answerLabel = 'Checking your answer...';
+    });
+
+    try {
+      final result = await _answerService.submitAnswer(
+        questionId: widget.questionId,
+        submittedAnswer: submittedAnswer,
+      );
+
+      if (!mounted) return;
+
+      setState(() {
+        _isSubmitting = false;
+      });
+
+      switch (result.status) {
+        case AnswerSubmissionStatus.invalidFormat:
+          setState(() {
+            _isAnswerInvalid = true;
+            _answerLabel =
+                'Invalid answer. Please enter the answer in the correct format.';
+          });
+          break;
+
+        case AnswerSubmissionStatus.correct:
+          setState(() {
+            _isAnswerInvalid = false;
+            _answerLabel = 'Correct answer!';
+          });
+
+          _showCorrectAnswerPopup();
+          break;
+
+        case AnswerSubmissionStatus.incorrect:
+          setState(() {
+            _isAnswerInvalid = false;
+            _answerLabel = 'Enter your answer';
+          });
+
+          _showWrongAnswerPopup();
+          break;
+
+        case AnswerSubmissionStatus.questionNotFound:
+        case AnswerSubmissionStatus.notLoggedIn:
+        case AnswerSubmissionStatus.error:
+          setState(() {
+            _isAnswerInvalid = false;
+            _answerLabel = 'Enter your answer';
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(result.message),
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: Colors.red.shade700,
+            ),
+          );
+          break;
+      }
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _isSubmitting = false;
+        _answerLabel = 'Enter your answer';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Submission failed: $e'),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    }
+  }
+
+  // ============================================================
+  // CORRECT ANSWER POPUP
+  // ============================================================
+
+  void _showCorrectAnswerPopup() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '🎉🥳🏆',
+                style: TextStyle(fontSize: 48),
+              ),
+
+              const SizedBox(height: 16),
+
+              const Text(
+                'Amazing!',
+                style: TextStyle(
+                  color: Color(0xFF15803D),
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              const Text(
+                'Your answer is absolutely correct!',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 15,
+                  height: 1.5,
+                ),
+              ),
+
+              const SizedBox(height: 22),
+
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF15803D),
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Awesome!',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ============================================================
+  // WRONG ANSWER POPUP
+  // ============================================================
+
+  void _showWrongAnswerPopup() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(24),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '😢💭',
+                style: TextStyle(fontSize: 48),
+              ),
+
+              const SizedBox(height: 16),
+
+              const Text(
+                'Not Quite!',
+                style: TextStyle(
+                  color: Color(0xFFDC2626),
+                  fontSize: 24,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+
+              const SizedBox(height: 10),
+
+              const Text(
+                'Your answer is incorrect. Don\'t give up, try again!',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: _text,
+                  fontSize: 15,
+                  height: 1.5,
+                ),
+              ),
+
+              const SizedBox(height: 22),
+
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                    _answerFocusNode.requestFocus();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _primary,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Try Again',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // ============================================================
@@ -151,7 +426,7 @@ class _QuestionDetailedViewScreenState
       case 'percent':
         return const _AnswerTypeInfo(
           label: 'Percentage',
-          format: 'Number followed by %',
+          format: 'Number optionally followed by %',
           example: '100%',
         );
 
@@ -164,18 +439,16 @@ class _QuestionDetailedViewScreenState
 
       case 'mixedfraction':
       case 'mixednumber':
-      case 'mixturedfraction':
         return const _AnswerTypeInfo(
           label: 'Mixed Fraction',
-          format:
-              'Whole number followed by a fraction separated by a space',
+          format: 'Whole number followed by a fraction',
           example: '5 1/2',
         );
 
       case 'radio':
       case 'ratio':
         return const _AnswerTypeInfo(
-          label: 'Radio',
+          label: 'Ratio',
           format: 'Two values separated by a colon (a:b)',
           example: '5:17',
         );
@@ -245,7 +518,9 @@ class _QuestionDetailedViewScreenState
                     ),
                   ),
                 ),
+
                 const SizedBox(height: 22),
+
                 const Text(
                   'Answer Type Guide',
                   style: TextStyle(
@@ -254,17 +529,25 @@ class _QuestionDetailedViewScreenState
                     fontWeight: FontWeight.w800,
                   ),
                 ),
+
                 const SizedBox(height: 18),
+
                 _infoRow('Type', info.label),
+
                 const SizedBox(height: 12),
+
                 _infoRow('Expected Format', info.format),
+
                 const SizedBox(height: 12),
+
                 _infoRow(
                   'Example',
                   info.example,
                   emphasize: true,
                 ),
+
                 const SizedBox(height: 22),
+
                 SizedBox(
                   width: double.infinity,
                   height: 48,
@@ -313,7 +596,9 @@ class _QuestionDetailedViewScreenState
               fontWeight: FontWeight.w600,
             ),
           ),
+
           const SizedBox(height: 5),
+
           Text(
             value,
             style: TextStyle(
@@ -439,7 +724,9 @@ class _QuestionDetailedViewScreenState
                         isStatusLoading: isStatusLoading,
                         answerType: answerType,
                       ),
+
                       const SizedBox(height: 18),
+
                       _buildQuestionCard(
                         questionNo: questionNo.toString(),
                         title: title,
@@ -447,9 +734,13 @@ class _QuestionDetailedViewScreenState
                         topic: topic,
                         difficulty: difficulty,
                       ),
+
                       const SizedBox(height: 20),
+
                       _buildAnswerInput(),
+
                       const SizedBox(height: 16),
+
                       _buildCustomKeyboard(),
                     ],
                   ),
@@ -500,7 +791,9 @@ class _QuestionDetailedViewScreenState
                 color: isStatusLoading ? _muted : statusColor,
                 size: 15,
               ),
+
               const SizedBox(width: 6),
+
               Text(
                 isStatusLoading
                     ? 'Checking...'
@@ -516,7 +809,9 @@ class _QuestionDetailedViewScreenState
             ],
           ),
         ),
+
         const Spacer(),
+
         Flexible(
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
@@ -547,7 +842,9 @@ class _QuestionDetailedViewScreenState
                       ),
                     ),
                   ),
+
                   const SizedBox(width: 5),
+
                   const Icon(
                     Icons.info_outline_rounded,
                     color: _primary,
@@ -611,7 +908,9 @@ class _QuestionDetailedViewScreenState
                   ),
                 ),
               ),
+
               const Spacer(),
+
               if (difficulty.trim().isNotEmpty)
                 _smallBadge(
                   difficulty,
@@ -619,7 +918,9 @@ class _QuestionDetailedViewScreenState
                 ),
             ],
           ),
+
           const SizedBox(height: 17),
+
           Text(
             title,
             style: const TextStyle(
@@ -629,7 +930,9 @@ class _QuestionDetailedViewScreenState
               fontWeight: FontWeight.w800,
             ),
           ),
+
           const SizedBox(height: 12),
+
           SelectableText(
             questionText,
             style: const TextStyle(
@@ -638,8 +941,10 @@ class _QuestionDetailedViewScreenState
               height: 1.65,
             ),
           ),
+
           if (topic.trim().isNotEmpty) ...[
             const SizedBox(height: 18),
+
             Row(
               children: [
                 const Icon(
@@ -647,7 +952,9 @@ class _QuestionDetailedViewScreenState
                   color: _muted,
                   size: 16,
                 ),
+
                 const SizedBox(width: 6),
+
                 Expanded(
                   child: Text(
                     topic,
@@ -670,10 +977,13 @@ class _QuestionDetailedViewScreenState
     switch (difficulty.trim().toLowerCase()) {
       case 'easy':
         return const Color(0xFF15803D);
+
       case 'medium':
         return const Color(0xFFB45309);
+
       case 'hard':
         return const Color(0xFFDC2626);
+
       default:
         return _primary;
     }
@@ -705,64 +1015,105 @@ class _QuestionDetailedViewScreenState
   // ============================================================
 
   Widget _buildAnswerInput() {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(15, 7, 8, 7),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFDADCE5)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.edit_outlined,
-            color: _muted,
-            size: 21,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 4, bottom: 8),
+          child: Text(
+            _answerLabel,
+            style: TextStyle(
+              color: _isAnswerInvalid
+                  ? _error
+                  : _isSubmitting
+                      ? _primary
+                      : _muted,
+              fontSize: 13,
+              fontWeight: _isAnswerInvalid
+                  ? FontWeight.w700
+                  : FontWeight.w600,
+            ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: TextField(
-              controller: _answerController,
-              focusNode: _answerFocusNode,
-              readOnly: true,
-              showCursor: true,
-              onTap: () {
-                // Keep the cursor active; custom keyboard handles input.
-                _answerFocusNode.requestFocus();
-              },
-              decoration: const InputDecoration(
-                hintText: 'Enter your answer...',
-                hintStyle: TextStyle(
-                  color: Color(0xFF9A9DA8),
-                  fontSize: 14,
+        ),
+
+        Container(
+          padding: const EdgeInsets.fromLTRB(15, 7, 8, 7),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: _isAnswerInvalid
+                  ? _error
+                  : const Color(0xFFDADCE5),
+              width: _isAnswerInvalid ? 1.5 : 1,
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.edit_outlined,
+                color: _isAnswerInvalid ? _error : _muted,
+                size: 21,
+              ),
+
+              const SizedBox(width: 10),
+
+              Expanded(
+                child: TextField(
+                  controller: _answerController,
+                  focusNode: _answerFocusNode,
+                  readOnly: true,
+                  showCursor: true,
+
+                  // Prevent automatic text selection.
+                  enableInteractiveSelection: false,
+
+                  onTap: () {
+                    _answerController.selection =
+                        TextSelection.collapsed(
+                      offset: _answerController.text.length,
+                    );
+
+                    _answerFocusNode.requestFocus();
+                  },
+
+                  decoration: const InputDecoration(
+                    hintText: 'Enter your answer...',
+                    hintStyle: TextStyle(
+                      color: Color(0xFF9A9DA8),
+                      fontSize: 14,
+                    ),
+                    border: InputBorder.none,
+                    isDense: true,
+                  ),
+
+                  style: const TextStyle(
+                    color: _text,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
-                border: InputBorder.none,
-                isDense: true,
               ),
-              style: const TextStyle(
-                color: _text,
-                fontSize: 16,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
+
+              if (_answerController.text.isNotEmpty)
+                IconButton(
+                  tooltip: 'Clear answer',
+                  onPressed: _isSubmitting ? null : _clearAnswer,
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    color: _muted,
+                    size: 19,
+                  ),
+                ),
+            ],
           ),
-          if (_answerController.text.isNotEmpty)
-            IconButton(
-              tooltip: 'Clear answer',
-              onPressed: _clearAnswer,
-              icon: const Icon(
-                Icons.close_rounded,
-                color: _muted,
-                size: 19,
-              ),
-            ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   // ============================================================
-  // CUSTOM DASHBOARD KEYBOARD
+  // CUSTOM KEYBOARD
   // ============================================================
 
   Widget _buildCustomKeyboard() {
@@ -771,7 +1122,15 @@ class _QuestionDetailedViewScreenState
       ['6', '7', '8', '9', '0'],
     ];
 
-    const symbolKeys = ['.', '−', '/', '%', ':', '^', '√'];
+    const symbolKeys = [
+      '.',
+      '−',
+      '/',
+      '%',
+      ':',
+      '^',
+      '√',
+    ];
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -797,6 +1156,7 @@ class _QuestionDetailedViewScreenState
                   ),
               ],
             ),
+
           Row(
             children: [
               for (final key in symbolKeys)
@@ -812,9 +1172,9 @@ class _QuestionDetailedViewScreenState
                 ),
             ],
           ),
+
           const SizedBox(height: 7),
 
-          // Submit and Backspace are inside the keyboard card.
           Row(
             children: [
               Expanded(
@@ -822,23 +1182,33 @@ class _QuestionDetailedViewScreenState
                 child: SizedBox(
                   height: 48,
                   child: ElevatedButton.icon(
-                    // Disabled until answer checking is implemented.
-                    onPressed: null,
-                    icon: const Icon(
-                      Icons.lock_outline_rounded,
-                      size: 17,
-                    ),
-                    label: const Text(
-                      'SUBMIT',
-                      style: TextStyle(
+                    onPressed: _isSubmitting ? null : _submitAnswer,
+                    icon: _isSubmitting
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.check_circle_outline_rounded,
+                            size: 17,
+                          ),
+                    label: Text(
+                      _isSubmitting ? 'CHECKING...' : 'SUBMIT',
+                      style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w800,
                         letterSpacing: 0.4,
                       ),
                     ),
                     style: ElevatedButton.styleFrom(
-                      disabledBackgroundColor: const Color(0xFFE4E5EB),
-                      disabledForegroundColor: const Color(0xFF858894),
+                      backgroundColor: _primary,
+                      foregroundColor: Colors.white,
+                      disabledBackgroundColor: const Color(0xFF9CA3AF),
+                      disabledForegroundColor: Colors.white,
                       elevation: 0,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(10),
@@ -847,7 +1217,9 @@ class _QuestionDetailedViewScreenState
                   ),
                 ),
               ),
+
               const SizedBox(width: 8),
+
               Expanded(
                 child: _keyboardKey(
                   label: 'Backspace',
@@ -858,11 +1230,15 @@ class _QuestionDetailedViewScreenState
               ),
             ],
           ),
+
           const SizedBox(height: 8),
-          const Text(
-            'Answer submission will be enabled in a future update.',
+
+          Text(
+            _isSubmitting
+                ? 'Checking your answer. Please wait...'
+                : 'Enter your answer using the keyboard above.',
             textAlign: TextAlign.center,
-            style: TextStyle(
+            style: const TextStyle(
               color: _muted,
               fontSize: 11,
               height: 1.3,
@@ -886,7 +1262,7 @@ class _QuestionDetailedViewScreenState
           : const Color(0xFFF7F8FC),
       borderRadius: BorderRadius.circular(10),
       child: InkWell(
-        onTap: onTap,
+        onTap: _isSubmitting ? null : onTap,
         borderRadius: BorderRadius.circular(10),
         child: SizedBox(
           height: compact ? 47 : 50,
@@ -909,7 +1285,9 @@ class _QuestionDetailedViewScreenState
                         size: 17,
                         color: _primary,
                       ),
+
                       const SizedBox(width: 5),
+
                       Flexible(
                         child: Text(
                           label,
@@ -949,7 +1327,9 @@ class _QuestionDetailedViewScreenState
               size: 48,
               color: const Color(0xFF9A9DA8),
             ),
+
             const SizedBox(height: 14),
+
             Text(
               title,
               textAlign: TextAlign.center,
@@ -959,7 +1339,9 @@ class _QuestionDetailedViewScreenState
                 fontWeight: FontWeight.w800,
               ),
             ),
+
             const SizedBox(height: 8),
+
             Text(
               message,
               textAlign: TextAlign.center,
@@ -969,7 +1351,9 @@ class _QuestionDetailedViewScreenState
                 height: 1.5,
               ),
             ),
+
             const SizedBox(height: 18),
+
             OutlinedButton(
               onPressed: () => Navigator.maybePop(context),
               child: const Text('Go Back'),
