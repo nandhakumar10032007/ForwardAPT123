@@ -21,8 +21,7 @@ class AnswerSubmissionResult {
 }
 
 class AnswerSubmissionService {
-  final FirebaseFirestore _firestore =
-      FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
@@ -36,7 +35,6 @@ class AnswerSubmissionService {
   }) async {
     try {
       // 1. Check logged-in user.
-
       final user = _auth.currentUser;
 
       if (user == null) {
@@ -57,10 +55,8 @@ class AnswerSubmissionService {
       }
 
       // 2. Fetch question from Firestore.
-
-      final questionRef = _firestore
-          .collection('commonQuestions')
-          .doc(questionId);
+      final questionRef =
+          _firestore.collection('commonQuestions').doc(questionId);
 
       final questionSnapshot = await questionRef.get();
 
@@ -85,10 +81,7 @@ class AnswerSubmissionService {
               .trim();
 
       final int questionNo =
-          int.tryParse(
-                questionData['questionNo'].toString(),
-              ) ??
-              0;
+          int.tryParse(questionData['questionNo'].toString()) ?? 0;
 
       if (answerType.isEmpty || correctAnswer.isEmpty) {
         return AnswerSubmissionResult(
@@ -97,8 +90,7 @@ class AnswerSubmissionService {
         );
       }
 
-      // 3. Check answer format FIRST.
-
+      // 3. Validate answer format FIRST.
       if (!isValidFormat(answer, answerType)) {
         return AnswerSubmissionResult(
           status: AnswerSubmissionStatus.invalidFormat,
@@ -107,8 +99,7 @@ class AnswerSubmissionService {
         );
       }
 
-      // 4. Check whether the answer is correct.
-
+      // 4. Check whether the answer is mathematically correct.
       final bool isCorrect = isCorrectAnswer(
         answer,
         correctAnswer,
@@ -122,71 +113,144 @@ class AnswerSubmissionService {
         );
       }
 
-      // 5. Get student's username.
+      // 5. Prepare Firestore references.
+      final userRef = _firestore.collection('users').doc(user.uid);
 
-      final userSnapshot = await _firestore
-          .collection('users')
-          .doc(user.uid)
-          .get();
-
-      if (!userSnapshot.exists) {
-        return AnswerSubmissionResult(
-          status: AnswerSubmissionStatus.error,
-          message: 'User profile not found.',
-        );
-      }
-
-      final userData = userSnapshot.data()!;
-
-      final String userName =
-          (userData['userName'] ?? 'Student').toString();
-
-      // 6. Prepare both Firestore document references.
-
-      // Under users/{uid}/solvedQuestions/{questionId}
-
-      final userSolvedRef = _firestore
-          .collection('users')
-          .doc(user.uid)
+      final userSolvedRef = userRef
           .collection('solvedQuestions')
           .doc(questionId);
 
-      // Under commonQuestions/{questionId}/solvedBy/{uid}
+      final questionSolvedRef =
+          questionRef.collection('solvedBy').doc(user.uid);
 
-      final questionSolvedRef = questionRef
-          .collection('solvedBy')
-          .doc(user.uid);
+      // 6. Get current IST date (UTC + 05:30).
+      final DateTime istNow = DateTime.now()
+          .toUtc()
+          .add(const Duration(hours: 5, minutes: 30));
 
-      // 7. Save both records using a batch.
+      final String today =
+          '${istNow.year.toString().padLeft(4, '0')}-'
+          '${istNow.month.toString().padLeft(2, '0')}-'
+          '${istNow.day.toString().padLeft(2, '0')}';
 
-      final batch = _firestore.batch();
+      final DateTime todayDate = DateTime.utc(
+        istNow.year,
+        istNow.month,
+        istNow.day,
+      );
 
-      batch.set(
-        userSolvedRef,
-        {
+      // 7. Use a transaction to prevent duplicate updates.
+      final bool wasFirstSubmission =
+          await _firestore.runTransaction<bool>((transaction) async {
+        // Read all required documents before writing.
+        final userSnapshot = await transaction.get(userRef);
+
+        final solvedSnapshot =
+            await transaction.get(userSolvedRef);
+
+        final questionSolvedSnapshot =
+            await transaction.get(questionSolvedRef);
+
+        if (!userSnapshot.exists) {
+          throw Exception('User profile not found.');
+        }
+
+        // IMPORTANT:
+        // If already solved, do not update anything.
+        // The correct-answer popup will still be shown.
+        if (solvedSnapshot.exists ||
+            questionSolvedSnapshot.exists) {
+          return false;
+        }
+
+        final userData = userSnapshot.data()!;
+
+        final String userName =
+            (userData['userName'] ?? 'Student').toString();
+
+        // 8. Calculate problem solved count.
+        final int oldProblemCount =
+            (userData['problemSolvedCount'] as num?)?.toInt() ?? 0;
+
+        final int newProblemCount = oldProblemCount + 1;
+
+        // 9. Calculate streak.
+        final int oldStreak =
+            (userData['streak'] as num?)?.toInt() ?? 0;
+
+        final String? lastActiveDate =
+            userData['lastActiveDate']?.toString();
+
+        int newStreak;
+
+        if (lastActiveDate == today) {
+          // Already solved at least one question today.
+          // Streak must not increase again.
+          newStreak = oldStreak;
+        } else if (lastActiveDate != null &&
+            lastActiveDate.isNotEmpty) {
+          final DateTime? previousDate =
+              DateTime.tryParse(lastActiveDate);
+
+          if (previousDate != null) {
+            final DateTime previousDay = DateTime.utc(
+              previousDate.year,
+              previousDate.month,
+              previousDate.day,
+            );
+
+            final int difference =
+                todayDate.difference(previousDay).inDays;
+
+            if (difference == 1) {
+              // Last active yesterday: continue streak.
+              newStreak = oldStreak + 1;
+            } else {
+              // Missed one or more days: start a new streak.
+              newStreak = 1;
+            }
+          } else {
+            // Invalid previous date.
+            newStreak = 1;
+          }
+        } else {
+          // First-ever successful submission.
+          newStreak = 1;
+        }
+
+        // 10. Update user document.
+        transaction.update(userRef, {
+          'problemSolvedCount': newProblemCount,
+          'streak': newStreak,
+          'lastSubmissionAt': FieldValue.serverTimestamp(),
+          'lastActiveDate': today,
+        });
+
+        // 11. Save solved question under user's document.
+        transaction.set(userSolvedRef, {
           'questionId': questionId,
           'questionNo': questionNo,
           'solvedAt': FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
+        });
 
-      batch.set(
-        questionSolvedRef,
-        {
+        // 12. Save student details under question's solvedBy.
+        transaction.set(questionSolvedRef, {
           'userId': user.uid,
           'userName': userName,
-        },
-        SetOptions(merge: true),
-      );
+        });
 
-      await batch.commit();
+        return true;
+      });
 
-      // 8. Return success.
-
+      // 13. Always return CORRECT for a mathematically
+      // correct answer, even if the user solved it before.
+      //
+      // If already solved, the transaction makes no writes.
       return AnswerSubmissionResult(
         status: AnswerSubmissionStatus.correct,
-        message: 'Correct answer!',
+        message: wasFirstSubmission
+            ? 'Correct answer!'
+            : 'Correct answer! You have already solved this question.',
       );
     } catch (e) {
       return AnswerSubmissionResult(
@@ -208,44 +272,37 @@ class AnswerSubmissionService {
 
     switch (answerType) {
       // INTEGER
-
       case 'integer':
         return RegExp(
           r'^[+-]?\d+$',
         ).hasMatch(value);
 
       // DECIMAL
-
       case 'decimal':
         return RegExp(
           r'^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$',
         ).hasMatch(value);
 
       // PERCENTAGE
-
       case 'percentage':
         return RegExp(
           r'^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*%?$',
         ).hasMatch(value);
 
       // FRACTION
-
       case 'fraction':
         return _isValidFraction(value);
 
       // MIXED FRACTION
-
       case 'mixed fraction':
       case 'mixed_fraction':
         return _isValidMixedFraction(value);
 
       // RATIO
-
       case 'ratio':
         return _isValidRatio(value);
 
       // EXPONENT
-
       case 'exponent':
         return _isValidExponent(value);
 
@@ -383,11 +440,9 @@ class AnswerSubmissionService {
 
     if (parts.length != 2) return null;
 
-    final numerator =
-        double.tryParse(parts[0].trim());
+    final numerator = double.tryParse(parts[0].trim());
 
-    final denominator =
-        double.tryParse(parts[1].trim());
+    final denominator = double.tryParse(parts[1].trim());
 
     if (numerator == null ||
         denominator == null ||
@@ -445,11 +500,9 @@ class AnswerSubmissionService {
   }
 
   bool _compareMixedFractions(String a, String b) {
-    final first = _answerAsNumber(a) ??
-        _mixedFractionValue(a);
+    final first = _answerAsNumber(a) ?? _mixedFractionValue(a);
 
-    final second = _answerAsNumber(b) ??
-        _mixedFractionValue(b);
+    final second = _answerAsNumber(b) ?? _mixedFractionValue(b);
 
     if (first == null || second == null) {
       return false;
@@ -488,7 +541,6 @@ class AnswerSubmissionService {
     }
 
     // Cross multiplication checks equivalent ratios.
-
     return first[0] * second[1] ==
         first[1] * second[0];
   }
@@ -529,11 +581,9 @@ class AnswerSubmissionService {
   }
 
   bool _compareExponents(String a, String b) {
-    final first = _exponentValue(a) ??
-        double.tryParse(a.trim());
+    final first = _exponentValue(a) ?? double.tryParse(a.trim());
 
-    final second = _exponentValue(b) ??
-        double.tryParse(b.trim());
+    final second = _exponentValue(b) ?? double.tryParse(b.trim());
 
     if (first == null || second == null) {
       return false;

@@ -21,6 +21,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   String _userName = 'Username';
   int _streak = 0;
+  int _problemSolvedCount = 0;
 
   List<Map<String, dynamic>> _questions = [];
 
@@ -58,28 +59,85 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final name = data?['userName']?.toString().trim();
 
-      final streakValue = data?['streak'];
-
-      int streak = 0;
-
-      if (streakValue is int) {
-        streak = streakValue;
-      } else if (streakValue is num) {
-        streak = streakValue.toInt();
-      } else {
-        streak = int.tryParse(
-              streakValue?.toString() ?? '',
-            ) ??
-            0;
-      }
+      final streak = _readInt(data?['streak']);
+      final solvedCount = _readInt(data?['problemSolvedCount']);
 
       setState(() {
         _userName =
             name != null && name.isNotEmpty ? name : 'Username';
 
-        _streak = streak;
+        _streak = streak < 0 ? 0 : streak;
+        _problemSolvedCount = solvedCount < 0 ? 0 : solvedCount;
       });
     });
+  }
+
+  // Convert Firestore values safely into integers.
+  int _readInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  // ============================================================
+  // PROBLEMS SOLVED CARD
+  // ============================================================
+
+  Widget _buildSolvedCountCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 14,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: const Color(0xFFE5E6EB),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color: const Color(0xFFEDEBFF),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(
+              Icons.task_alt_rounded,
+              color: Color(0xFF4F46E5),
+              size: 23,
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          const Expanded(
+            child: Text(
+              'Problems solved',
+              style: TextStyle(
+                color: Color(0xFF777A87),
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+
+          Text(
+            '$_problemSolvedCount',
+            style: const TextStyle(
+              color: Color(0xFF171923),
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ============================================================
@@ -96,6 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
             'Please log in to view questions.';
         _questions = [];
       });
+
       return;
     }
 
@@ -289,7 +348,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
           const SizedBox(width: 12),
+
           const Expanded(
             child: Text(
               'ForwardAPT',
@@ -300,6 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
           GestureDetector(
             onTap: _showStreakDialog,
             child: Container(
@@ -327,7 +389,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
           const SizedBox(width: 10),
+
           GestureDetector(
             onTap: _showProfileMenu,
             child: Container(
@@ -370,7 +434,9 @@ class _HomeScreenState extends State<HomeScreen> {
               fontWeight: FontWeight.w800,
             ),
           ),
+
           const SizedBox(height: 8),
+
           Text(
             'Ready to sharpen your aptitude skills today?',
             style: TextStyle(
@@ -379,6 +445,10 @@ class _HomeScreenState extends State<HomeScreen> {
               height: 1.4,
             ),
           ),
+
+          const SizedBox(height: 18),
+
+          _buildSolvedCountCard(),
         ],
       ),
     );
@@ -437,7 +507,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
           const SizedBox(width: 12),
+
           GestureDetector(
             onTap: _showFilterSheet,
             child: Container(
@@ -481,6 +553,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ),
+
           if (!_isLoadingQuestions && _questionLoadError == null)
             Text(
               '${_filteredQuestions.length} shown',
@@ -489,6 +562,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontSize: 12,
               ),
             ),
+
           if (hasFilter)
             TextButton(
               onPressed: () {
@@ -539,7 +613,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   size: 44,
                   color: Color(0xFF858894),
                 ),
+
                 const SizedBox(height: 12),
+
                 Text(
                   _questionLoadError!,
                   textAlign: TextAlign.center,
@@ -548,7 +624,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontSize: 14,
                   ),
                 ),
+
                 const SizedBox(height: 14),
+
                 ElevatedButton(
                   onPressed: _loadRandomUnsolvedQuestions,
                   style: ElevatedButton.styleFrom(
@@ -592,180 +670,182 @@ class _HomeScreenState extends State<HomeScreen> {
   // QUESTION CARD
   // ============================================================
 
- Widget _buildQuestionCard(Map<String, dynamic> question) {
-  final difficulty = question['difficulty'].toString();
+  Widget _buildQuestionCard(Map<String, dynamic> question) {
+    final difficulty = question['difficulty'].toString();
 
-  Color difficultyColor;
-  Color difficultyBackground;
+    Color difficultyColor;
+    Color difficultyBackground;
 
-  switch (difficulty) {
-    case 'Easy':
-      difficultyColor = const Color(0xFF15803D);
-      difficultyBackground = const Color(0xFFDCFCE7);
-      break;
+    switch (difficulty) {
+      case 'Easy':
+        difficultyColor = const Color(0xFF15803D);
+        difficultyBackground = const Color(0xFFDCFCE7);
+        break;
 
-    case 'Medium':
-      difficultyColor = const Color(0xFFB45309);
-      difficultyBackground = const Color(0xFFFFF4C7);
-      break;
+      case 'Medium':
+        difficultyColor = const Color(0xFFB45309);
+        difficultyBackground = const Color(0xFFFFF4C7);
+        break;
 
-    default:
-      difficultyColor = const Color(0xFFDC2626);
-      difficultyBackground = const Color(0xFFFEE2E2);
-  }
+      default:
+        difficultyColor = const Color(0xFFDC2626);
+        difficultyBackground = const Color(0xFFFEE2E2);
+    }
 
-  return GestureDetector(
-    onTap: () {
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => QuestionDetailedViewScreen(
-            questionId: question['documentId'].toString(),
-            questionNo: int.tryParse(
-                  question['number'].toString(),
-                ) ??
-                0,
-            title: question['title'].toString(),
-            question: question['description'].toString(),
-            topic: question['topic'].toString(),
-            difficulty: question['difficulty'].toString(),
-            answerType: question['answerType'].toString(),
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => QuestionDetailedViewScreen(
+              questionId: question['documentId'].toString(),
+              questionNo: int.tryParse(
+                    question['number'].toString(),
+                  ) ??
+                  0,
+              title: question['title'].toString(),
+              question: question['description'].toString(),
+              topic: question['topic'].toString(),
+              difficulty: question['difficulty'].toString(),
+              answerType: question['answerType'].toString(),
+            ),
           ),
-        ),
-      );
-    },
-    child: Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE5E6EB),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.025),
-            blurRadius: 8,
-            offset: const Offset(0, 3),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: const Color(0xFFE5E6EB),
           ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 11,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFEDEBFF),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: Text(
-                  'Q${question['number']}',
-                  style: const TextStyle(
-                    color: Color(0xFF4F46E5),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w800,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.025),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEDEBFF),
+                    borderRadius: BorderRadius.circular(9),
+                  ),
+                  child: Text(
+                    'Q${question['number']}',
+                    style: const TextStyle(
+                      color: Color(0xFF4F46E5),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
+
+                const Spacer(),
+
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: difficultyBackground,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    difficulty,
+                    style: TextStyle(
+                      color: difficultyColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            Text(
+              question['title'].toString(),
+              style: const TextStyle(
+                color: Color(0xFF171923),
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
               ),
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 11,
-                  vertical: 7,
+            ),
+
+            const SizedBox(height: 7),
+
+            Text(
+              question['description'].toString(),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Color(0xFF777A87),
+                fontSize: 13,
+                height: 1.45,
+              ),
+            ),
+
+            const SizedBox(height: 15),
+
+            Row(
+              children: [
+                const Icon(
+                  Icons.category_outlined,
+                  size: 16,
+                  color: Color(0xFF858894),
                 ),
-                decoration: BoxDecoration(
-                  color: difficultyBackground,
-                  borderRadius: BorderRadius.circular(20),
+
+                const SizedBox(width: 6),
+
+                Expanded(
+                  child: Text(
+                    question['topic'].toString(),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Color(0xFF777A87),
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ),
-                child: Text(
-                  difficulty,
+
+                const Text(
+                  'Solve',
                   style: TextStyle(
-                    color: difficultyColor,
-                    fontSize: 11,
+                    color: Color(0xFF4F46E5),
+                    fontSize: 13,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-              ),
-            ],
-          ),
 
-          const SizedBox(height: 16),
+                const SizedBox(width: 6),
 
-          Text(
-            question['title'].toString(),
-            style: const TextStyle(
-              color: Color(0xFF171923),
-              fontSize: 17,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-
-          const SizedBox(height: 7),
-
-          Text(
-            question['description'].toString(),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF777A87),
-              fontSize: 13,
-              height: 1.45,
-            ),
-          ),
-
-          const SizedBox(height: 15),
-
-          Row(
-            children: [
-              const Icon(
-                Icons.category_outlined,
-                size: 16,
-                color: Color(0xFF858894),
-              ),
-
-              const SizedBox(width: 6),
-
-              Expanded(
-                child: Text(
-                  question['topic'].toString(),
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: Color(0xFF777A87),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-
-              const Text(
-                'Solve',
-                style: TextStyle(
+                const Icon(
+                  Icons.arrow_forward_ios_rounded,
+                  size: 12,
                   color: Color(0xFF4F46E5),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
                 ),
-              ),
-
-              const SizedBox(width: 6),
-
-              const Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 12,
-                color: Color(0xFF4F46E5),
-              ),
-            ],
-          ),
-        ],
+              ],
+            ),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   // ============================================================
   // EMPTY STATE
@@ -798,7 +878,9 @@ class _HomeScreenState extends State<HomeScreen> {
               size: 48,
               color: Color(0xFFB0B3BE),
             ),
+
             const SizedBox(height: 14),
+
             const Text(
               'No questions found',
               style: TextStyle(
@@ -807,7 +889,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontWeight: FontWeight.w700,
               ),
             ),
+
             const SizedBox(height: 6),
+
             Text(
               message,
               textAlign: TextAlign.center,
@@ -816,8 +900,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontSize: 13,
               ),
             ),
+
             if (_questions.isEmpty) ...[
               const SizedBox(height: 16),
+
               OutlinedButton(
                 onPressed: _loadRandomUnsolvedQuestions,
                 child: const Text('Load Again'),
@@ -872,7 +958,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.w800,
                       ),
                     ),
+
                     const SizedBox(height: 24),
+
                     const Text(
                       'Difficulty',
                       style: TextStyle(
@@ -881,7 +969,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+
                     const SizedBox(height: 10),
+
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
@@ -900,7 +990,9 @@ class _HomeScreenState extends State<HomeScreen> {
                           )
                           .toList(),
                     ),
+
                     const SizedBox(height: 24),
+
                     const Text(
                       'Topic',
                       style: TextStyle(
@@ -909,7 +1001,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         fontWeight: FontWeight.w700,
                       ),
                     ),
+
                     const SizedBox(height: 10),
+
                     Container(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 14,
@@ -945,7 +1039,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                     ),
+
                     const SizedBox(height: 26),
+
                     SizedBox(
                       width: double.infinity,
                       height: 52,
@@ -1044,7 +1140,9 @@ class _HomeScreenState extends State<HomeScreen> {
             size: 14,
             color: const Color(0xFF777A87),
           ),
+
           const SizedBox(width: 5),
+
           Text(
             text,
             style: const TextStyle(
@@ -1076,7 +1174,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 '🔥',
                 style: TextStyle(fontSize: 25),
               ),
+
               const SizedBox(width: 8),
+
               Text(
                 '$_streak Day Streak',
                 style: const TextStyle(
@@ -1142,7 +1242,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: Color(0xFF4F46E5),
                   ),
                 ),
+
                 const SizedBox(height: 12),
+
                 Text(
                   _userName,
                   style: const TextStyle(
@@ -1151,7 +1253,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: Color(0xFF171923),
                   ),
                 ),
+
                 const SizedBox(height: 4),
+
                 const Text(
                   'Keep learning and moving forward 🚀',
                   style: TextStyle(
@@ -1159,17 +1263,21 @@ class _HomeScreenState extends State<HomeScreen> {
                     color: Color(0xFF777A87),
                   ),
                 ),
+
                 const SizedBox(height: 20),
+
                 _profileOption(
                   sheetContext,
                   Icons.person_outline_rounded,
                   'View Profile',
                 ),
+
                 _profileOption(
                   sheetContext,
                   Icons.settings_outlined,
                   'Settings',
                 ),
+
                 ListTile(
                   leading: const Icon(
                     Icons.logout_rounded,
@@ -1178,6 +1286,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   title: const Text('Log Out'),
                   onTap: () async {
                     Navigator.pop(sheetContext);
+
                     await FirebaseAuth.instance.signOut();
 
                     if (!mounted) return;
