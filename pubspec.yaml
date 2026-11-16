@@ -24,6 +24,7 @@ dependencies:
   # Excel Question Upload
   excel: ^4.0.6
   file_picker: ^11.0.2
+  cloud_functions: ^6.5.1
 
 dev_dependencies:
   flutter_test:

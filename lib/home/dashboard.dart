@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-
+import '../Contest/Contest_Home_Screen.dart';
 import 'home_screen.dart';
 
 class Dashboard extends StatefulWidget {
@@ -21,10 +21,7 @@ class _DashboardState extends State<Dashboard> {
 
     _pages = [
       const HomeScreen(),
-      const _PlaceholderPage(
-        title: 'Weekly Contest',
-        icon: Icons.emoji_events_rounded,
-      ),
+      const ContestHomeScreen(),
       const _PlaceholderPage(
         title: 'Custom Test',
         icon: Icons.edit_note_rounded,
