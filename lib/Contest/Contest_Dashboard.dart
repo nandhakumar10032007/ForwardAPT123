@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'Contest_Questions_Screen.dart';
 import 'Contest_Solving_Screen.dart';
+import 'Contest_Result.dart';
 
 class ContestDashboard extends StatefulWidget {
   final String contestId;
@@ -112,9 +113,8 @@ class _ContestDashboardState extends State<ContestDashboard> {
         ),
 
         // TAB 3: RESULT
-        _buildComingSoonPage(
-          title: 'Result',
-          icon: Icons.assessment_rounded,
+        ContestResult(
+          contestId: widget.contestId,
         ),
 
         // TAB 4: LEADERBOARD
@@ -216,6 +216,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
       ),
     );
   }
+
   // Bottom navigation bar.
   Widget _buildBottomNavigationBar() {
     return Container(
