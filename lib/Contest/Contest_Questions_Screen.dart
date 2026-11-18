@@ -7,11 +7,16 @@ class ContestQuestionsScreen extends StatefulWidget {
   final VoidCallback onExit;
   final ValueChanged<String> onQuestionSelected;
 
+  /// True when this screen is opened from a previous contest for practice.
+  /// Practice mode reads historical progress but never writes to Firestore.
+  final bool isPracticeMode;
+
   const ContestQuestionsScreen({
     super.key,
     required this.contestId,
     required this.onExit,
     required this.onQuestionSelected,
+    this.isPracticeMode = false,
   });
 
   @override
@@ -94,12 +99,23 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return {};
 
-    final resultCollection = FirebaseFirestore.instance
+    final registeredDocument = FirebaseFirestore.instance
         .collection('Contest_Questions')
         .doc(widget.contestId)
         .collection('Registered')
-        .doc(user.uid)
-        .collection('Result');
+        .doc(user.uid);
+
+    // In practice mode, first check whether this user originally attended.
+    // A non-attendee must not try to read another user's or a missing
+    // registration's Result subcollection; their displayed progress is zero.
+    if (widget.isPracticeMode) {
+      final registrationSnapshot = await registeredDocument.get();
+      if (!registrationSnapshot.exists) {
+        return {};
+      }
+    }
+
+    final resultCollection = registeredDocument.collection('Result');
 
     final snapshots = await Future.wait(
       questions.map((question) => resultCollection.doc(question.id).get()),
@@ -335,9 +351,33 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
             ),
           ),
           const SizedBox(height: 7),
-          const Text(
-            'Explore the questions and track your contest progress.',
-            style: TextStyle(
+          if (widget.isPracticeMode) ...[
+            Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 6,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEDEBFF),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'PRACTICE MODE',
+                style: TextStyle(
+                  color: _primary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+            const SizedBox(height: 9),
+          ],
+          Text(
+            widget.isPracticeMode
+                ? 'Practice with these previous contest questions. Your original contest record will not change.'
+                : 'Explore the questions and track your contest progress.',
+            style: const TextStyle(
               color: _muted,
               fontSize: 14,
               height: 1.45,

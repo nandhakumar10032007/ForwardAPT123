@@ -11,11 +11,16 @@ class ContestSolvingScreen extends StatefulWidget {
   final String? initialQuestionId;
   final VoidCallback? onSubmit;
 
+  /// When true, answer checking is local/read-only and must not submit to
+  /// the contest submission service or change any stored contest records.
+  final bool isPracticeMode;
+
   const ContestSolvingScreen({
     super.key,
     required this.contestId,
     this.initialQuestionId,
     this.onSubmit,
+    this.isPracticeMode = false,
   });
 
   @override
@@ -41,6 +46,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   bool _isSubmitting = false;
   final Set<String> _solvedQuestionIds = {};
   final ContestSubmitService _submitService = ContestSubmitService();
+  bool _hasOriginalRegistration = false;
   String _answerLabel = 'Enter your answer';
 
   @override
@@ -52,34 +58,81 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         .collection('Questions')
         .snapshots();
 
-    // Restore solved-question state from Firestore whenever this screen opens.
-    // This listener also keeps the solving UI synchronized with live progress.
+    // Restore the original solved state. In practice mode, first verify that
+    // this user actually registered for the original contest. Non-attendees
+    // display zero progress and do not subscribe to a Result subcollection.
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid != null) {
-      _progressSubscription = FirebaseFirestore.instance
+      if (widget.isPracticeMode) {
+        _loadOriginalPracticeProgress(uid);
+      } else {
+        _hasOriginalRegistration = true;
+        _listenToProgress(uid);
+      }
+    }
+  }
+
+  Future<void> _loadOriginalPracticeProgress(String uid) async {
+    try {
+      final registration = await FirebaseFirestore.instance
           .collection('Contest_Questions')
           .doc(widget.contestId)
           .collection('Registered')
           .doc(uid)
-          .collection('Result')
-          .snapshots()
-          .listen((snapshot) {
-        if (!mounted) return;
+          .get();
 
-        final solvedIds = snapshot.docs
-            .where((doc) =>
-                (doc.data()['Status'] ?? '').toString().toLowerCase() ==
-                'solved')
-            .map((doc) => doc.id)
-            .toSet();
+      if (!mounted) return;
 
+      if (!registration.exists) {
         setState(() {
-          _solvedQuestionIds
-            ..clear()
-            ..addAll(solvedIds);
+          _hasOriginalRegistration = false;
+          _solvedQuestionIds.clear();
         });
+        return;
+      }
+
+      setState(() {
+        _hasOriginalRegistration = true;
+      });
+      _listenToProgress(uid);
+    } catch (_) {
+      // If the user cannot read an original registration, keep the practice
+      // view at zero progress. No write is attempted.
+      if (!mounted) return;
+      setState(() {
+        _hasOriginalRegistration = false;
+        _solvedQuestionIds.clear();
       });
     }
+  }
+
+  void _listenToProgress(String uid) {
+    _progressSubscription?.cancel();
+    _progressSubscription = FirebaseFirestore.instance
+        .collection('Contest_Questions')
+        .doc(widget.contestId)
+        .collection('Registered')
+        .doc(uid)
+        .collection('Result')
+        .snapshots()
+        .listen((snapshot) {
+      if (!mounted) return;
+
+      final solvedIds = snapshot.docs
+          .where((doc) =>
+              (doc.data()['Status'] ?? '').toString().toLowerCase() ==
+              'solved')
+          .map((doc) => doc.id)
+          .toSet();
+
+      setState(() {
+        _solvedQuestionIds
+          ..clear()
+          ..addAll(solvedIds);
+      });
+    }, onError: (_) {
+      // Keep the screen usable if historical progress is not readable.
+    });
   }
 
   @override
@@ -88,6 +141,21 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     if (oldWidget.initialQuestionId != widget.initialQuestionId) {
       _loadedInitialSelection = false;
       if (_questions.isNotEmpty) _selectInitialQuestion();
+    }
+
+    if (oldWidget.isPracticeMode != widget.isPracticeMode) {
+      _progressSubscription?.cancel();
+      _solvedQuestionIds.clear();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+      if (uid != null) {
+        if (widget.isPracticeMode) {
+          _hasOriginalRegistration = false;
+          _loadOriginalPracticeProgress(uid);
+        } else {
+          _hasOriginalRegistration = true;
+          _listenToProgress(uid);
+        }
+      }
     }
   }
 
@@ -218,8 +286,10 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     final questionId = _currentQuestionId;
     if (questionId == null || _isSubmitting) return;
 
-    // Firestore progress is authoritative; never submit an already-solved question.
-    if (_solvedQuestionIds.contains(questionId)) {
+    // In a live contest, a solved question cannot be submitted again.
+    // In practice mode, allow repeat attempts without changing the original
+    // solved state stored in Firestore.
+    if (!widget.isPracticeMode && _solvedQuestionIds.contains(questionId)) {
       setState(() {
         _answerController.clear();
         _answers.remove(questionId);
@@ -247,6 +317,13 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
       _isAnswerInvalid = false;
       _answerLabel = 'Checking your answer...';
     });
+
+    // Practice mode never calls submitAnswer(), because that service writes
+    // progress, penalties, summaries, and scores to Firestore.
+    if (widget.isPracticeMode) {
+      _checkPracticeAnswer(questionId, answer);
+      return;
+    }
 
     try {
       final result = await _submitService.submitAnswer(
@@ -340,6 +417,78 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     }
   }
 
+  /// Checks an answer against the question's existing answer key locally.
+  ///
+  /// This intentionally does not write to Firestore or mutate the original
+  /// solved-question set. The answer key is client-readable in this project,
+  /// so this is suitable for practice UX, not cheat-proof assessment.
+  void _checkPracticeAnswer(String questionId, String answer) {
+    final data = _currentData;
+    final answerType = (data['answerType'] ?? '').toString().trim();
+    final correctAnswer = (data['correctAnswer'] ?? '').toString().trim();
+
+    try {
+      if (answerType.isEmpty || correctAnswer.isEmpty) {
+        setState(() {
+          _isAnswerInvalid = true;
+          _answerLabel = 'Answer information is unavailable for this question.';
+          _isSubmitting = false;
+        });
+        return;
+      }
+
+      if (!_submitService.isValidFormat(answer, answerType)) {
+        setState(() {
+          _isAnswerInvalid = true;
+          _answerLabel =
+              'Invalid answer. Please enter the answer in the correct format.';
+          _isSubmitting = false;
+          _answers[questionId] = answer;
+        });
+        return;
+      }
+
+      final isCorrect =
+          _submitService.isCorrectAnswer(answer, correctAnswer, answerType);
+
+      if (!mounted) return;
+
+      setState(() {
+        _isAnswerInvalid = false;
+        _isSubmitting = false;
+        _answerLabel = isCorrect
+            ? 'Correct answer! (Practice only)'
+            : 'Practice answer checked. Try again!';
+        // Keep the entered answer locally. Do not add this question to
+        // _solvedQuestionIds or update its original progress.
+        _answers[questionId] = answer;
+      });
+
+      if (isCorrect) {
+        _showCorrectAnswerPopup();
+      } else {
+        _showWrongAnswerPopup(
+          penaltyMark: 0,
+          penaltyCount: 0,
+          practiceMode: true,
+        );
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _isSubmitting = false;
+        _answerLabel = 'Could not check this practice answer.';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Practice check failed: $error'),
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    }
+  }
+
   // Same popup design as QuestionDetailedViewScreen.
   void _showCorrectAnswerPopup() {
     showDialog<void>(
@@ -401,6 +550,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   void _showWrongAnswerPopup({
     required double penaltyMark,
     required int penaltyCount,
+    bool practiceMode = false,
   }) {
     showDialog<void>(
       context: context,
@@ -429,16 +579,29 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
                 textAlign: TextAlign.center,
                 style: TextStyle(color: _text, fontSize: 15, height: 1.5),
               ),
-              const SizedBox(height: 12),
-              Text(
-                'Penalty: -${penaltyMark.toStringAsFixed(2)} marks  •  Wrong attempts: $penaltyCount',
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFFDC2626),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
+              if (!practiceMode) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Penalty: -${penaltyMark.toStringAsFixed(2)} marks  •  Wrong attempts: $penaltyCount',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Color(0xFFDC2626),
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
-              ),
+              ] else ...[
+                const SizedBox(height: 8),
+                const Text(
+                  'Practice only — no penalty or contest record was changed.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 22),
               SizedBox(
                 width: double.infinity,
@@ -563,7 +726,40 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         surfaceTintColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text('Doing', style: TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w800)),
+        title: Row(
+          children: [
+            const Text(
+              'Doing',
+              style: TextStyle(
+                color: _text,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (widget.isPracticeMode) ...[
+              const SizedBox(width: 9),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEDEBFF),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Text(
+                  'PRACTICE',
+                  style: TextStyle(
+                    color: _primary,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: .4,
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
         actions: [Padding(padding: const EdgeInsets.only(right: 18), child: Center(child: Text(_questions.isEmpty ? '' : '${_currentIndex + 1} / ${_questions.length}', style: const TextStyle(color: _muted, fontWeight: FontWeight.w700))))],
         bottom: const PreferredSize(preferredSize: Size.fromHeight(1), child: Divider(height: 1, color: Color(0xFFE7E8EE))),
       ),
@@ -651,6 +847,9 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   Widget _buildPenaltyIndicator(String questionId) {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return const SizedBox.shrink();
+    if (widget.isPracticeMode && !_hasOriginalRegistration) {
+      return const SizedBox.shrink();
+    }
 
     final progressStream = FirebaseFirestore.instance
         .collection('Contest_Questions')
@@ -793,7 +992,8 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         Row(children: [
           Expanded(flex: 2, child: SizedBox(height: 48, child: ElevatedButton.icon(
             onPressed: (_isSubmitting ||
-                    (_currentQuestionId != null &&
+                    (!widget.isPracticeMode &&
+                        _currentQuestionId != null &&
                         _solvedQuestionIds.contains(_currentQuestionId)))
                 ? null
                 : _submitAnswer,

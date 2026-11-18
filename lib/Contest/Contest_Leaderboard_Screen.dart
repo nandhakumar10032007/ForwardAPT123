@@ -83,7 +83,16 @@ class ContestLeaderboardService {
 
 class ContestLeaderboardScreen extends StatefulWidget {
   final String contestId;
-  const ContestLeaderboardScreen({super.key, required this.contestId});
+
+  /// Practice mode can only view an already-generated leaderboard.
+  /// It must never trigger rank generation or modify Rank documents.
+  final bool isPracticeMode;
+
+  const ContestLeaderboardScreen({
+    super.key,
+    required this.contestId,
+    this.isPracticeMode = false,
+  });
 
   @override
   State<ContestLeaderboardScreen> createState() => _ContestLeaderboardScreenState();
@@ -160,6 +169,10 @@ class _ContestLeaderboardScreenState extends State<ContestLeaderboardScreen> {
   }
 
   Future<void> _generateIfEnded() async {
+    // Critical read-only guard: previous-contest practice must never generate
+    // or update the original contest leaderboard.
+    if (widget.isPracticeMode) return;
+
     if (_endTime == null || DateTime.now().isBefore(_endTime!) || _generating) return;
     _generating = true;
     try {
@@ -265,6 +278,19 @@ class _ContestLeaderboardScreenState extends State<ContestLeaderboardScreen> {
       padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Text('Leaderboard 🏆', textAlign: TextAlign.center, style: TextStyle(color: _text, fontSize: 24, fontWeight: FontWeight.w900)),
+        if (widget.isPracticeMode) ...[
+          const SizedBox(height: 8),
+          const Text(
+            'PRACTICE MODE • ORIGINAL RANKS',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _purple,
+              fontSize: 11,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .5,
+            ),
+          ),
+        ],
         const SizedBox(height: 6),
         const Text('Top 10 contest performers', textAlign: TextAlign.center, style: TextStyle(color: _muted, fontSize: 14)),
         const SizedBox(height: 20),
@@ -298,6 +324,45 @@ class _ContestLeaderboardScreenState extends State<ContestLeaderboardScreen> {
           final docs = snap.data?.docs ?? [];
           final entries = _sortedParticipants(docs);
           if (entries.isNotEmpty) return _leaderboard(docs);
+
+          if (widget.isPracticeMode) {
+            return const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.emoji_events_outlined,
+                      size: 48,
+                      color: Color(0xFFB8B9C4),
+                    ),
+                    SizedBox(height: 14),
+                    Text(
+                      'Original leaderboard is not available yet.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    SizedBox(height: 7),
+                    Text(
+                      'Practice mode only displays ranks that were already generated. It will not create or change the leaderboard.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _muted,
+                        fontSize: 13,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
           if (_error != null) return Center(child: Padding(padding: const EdgeInsets.all(24), child: Column(mainAxisSize: MainAxisSize.min, children: [Text(_error!, textAlign: TextAlign.center, style: const TextStyle(color: _muted)), const SizedBox(height: 12), ElevatedButton(onPressed: () { setState(() => _error = null); _generateIfEnded(); }, child: const Text('Try Again'))])));
           return const Center(child: CircularProgressIndicator(color: _purple));
         },

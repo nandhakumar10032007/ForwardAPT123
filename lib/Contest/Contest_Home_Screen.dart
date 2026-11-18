@@ -347,6 +347,20 @@ Future<void> _register(String contestId) async {
     );
   }
 
+  // Previous contests open in read-only practice mode.
+  // The dashboard will accept this flag in the next integration step.
+  void _enterPreviousContest(String contestId) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ContestDashboard(
+          contestId: contestId,
+          isPracticeMode: true,
+        ),
+      ),
+    );
+  }
+
   void _message(String message, {bool error = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -736,6 +750,7 @@ Future<void> _register(String contestId) async {
         resultByContest: results,
         formatDate: _formatDate,
         scoreForContest: _scoreFor,
+        onContestSelected: _enterPreviousContest,
       ),
     ));
   }
@@ -748,10 +763,16 @@ Future<void> _register(String contestId) async {
     final id = _stringValue(data['Contest_ID'], fallback: contest.id);
     final date = _dateValue(data['Contest_Date']) ?? _dateValue(data['Start_Time']);
     final topics = _topics(data['Topics']);
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
+    return Material(
+      color: Colors.white,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () => _enterPreviousContest(contest.id),
+        child: Container(
+          width: double.infinity,
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
@@ -796,9 +817,11 @@ Future<void> _register(String contestId) async {
                   )),
             ],
           ),
-        ],
+          ],
+        ),
       ),
-    );
+    ),
+  );
   }
 
   Widget _informationRow({
@@ -891,12 +914,14 @@ class _AllPreviousContestsScreen extends StatelessWidget {
     required this.resultByContest,
     required this.formatDate,
     required this.scoreForContest,
+    required this.onContestSelected,
   });
 
   final List<QueryDocumentSnapshot<Map<String, dynamic>>> contests;
   final Map<String, Map<String, dynamic>> resultByContest;
   final String Function(DateTime) formatDate;
   final String Function(String, Map<String, dynamic>?) scoreForContest;
+  final ValueChanged<String> onContestSelected;
 
   DateTime? _date(Map<String, dynamic> data) {
     final value = data['Contest_Date'] ?? data['Start_Time'];
@@ -928,6 +953,7 @@ class _AllPreviousContestsScreen extends StatelessWidget {
             color: Colors.white,
             margin: const EdgeInsets.only(bottom: 12),
             child: ListTile(
+              onTap: () => onContestSelected(contest.id),
               title: Text('Contest #$id',
                   style: const TextStyle(fontWeight: FontWeight.w800)),
               subtitle: Text('$topics\n${date == null ? 'Date unavailable' : formatDate(date)}'),

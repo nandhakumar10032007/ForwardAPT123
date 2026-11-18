@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 
 import 'Contest_Questions_Screen.dart';
@@ -9,14 +8,20 @@ import 'Contest_Leaderboard_Screen.dart';
 class ContestDashboard extends StatefulWidget {
   final String contestId;
 
+  /// True when this dashboard is opened from Previous Contests.
+  ///
+  /// Practice mode is read-only: answering questions must never update
+  /// registration, progress, penalties, scores, or leaderboard data.
+  final bool isPracticeMode;
+
   const ContestDashboard({
     super.key,
     required this.contestId,
+    this.isPracticeMode = false,
   });
 
   @override
-  State<ContestDashboard> createState() =>
-      _ContestDashboardState();
+  State<ContestDashboard> createState() => _ContestDashboardState();
 }
 
 class _ContestDashboardState extends State<ContestDashboard> {
@@ -61,7 +66,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
     }
 
     setState(() {
-      // Directly opening Doing from another tab starts at E01.
+      // Directly opening Doing from another tab starts at the first question.
       if (index == 1 && _selectedIndex != 1) {
         _selectedQuestionId = null;
       }
@@ -105,22 +110,26 @@ class _ContestDashboardState extends State<ContestDashboard> {
           contestId: widget.contestId,
           onExit: _goToContestHome,
           onQuestionSelected: _openSelectedQuestion,
+          isPracticeMode: widget.isPracticeMode,
         ),
 
         // TAB 2: DOING
         ContestSolvingScreen(
           contestId: widget.contestId,
           initialQuestionId: _selectedQuestionId,
+          isPracticeMode: widget.isPracticeMode,
         ),
 
         // TAB 3: RESULT
         ContestResult(
           contestId: widget.contestId,
+          isPracticeMode: widget.isPracticeMode,
         ),
 
         // TAB 4: LEADERBOARD
         ContestLeaderboardScreen(
           contestId: widget.contestId,
+          isPracticeMode: widget.isPracticeMode,
         ),
       ],
     );
@@ -153,9 +162,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                   color: _primary,
                 ),
               ),
-
               const SizedBox(height: 24),
-
               Text(
                 title,
                 style: const TextStyle(
@@ -164,9 +171,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                   fontWeight: FontWeight.w800,
                 ),
               ),
-
               const SizedBox(height: 12),
-
               const Text(
                 'Coming Soon 🚀',
                 style: TextStyle(
@@ -175,9 +180,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-
               const SizedBox(height: 9),
-
               const Text(
                 'We are working on this section.\n'
                 'Stay tuned for something exciting!',
@@ -188,9 +191,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                   height: 1.6,
                 ),
               ),
-
               const SizedBox(height: 28),
-
               OutlinedButton.icon(
                 onPressed: _goToContestHome,
                 icon: const Icon(
@@ -244,8 +245,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                   child: _buildNavigationItem(
                     title: item['title'] as String,
                     icon: item['icon'] as IconData,
-                    selectedIcon:
-                        item['selectedIcon'] as IconData,
+                    selectedIcon: item['selectedIcon'] as IconData,
                     isSelected: isSelected,
                     onTap: () => _onNavigationSelected(index),
                   ),
@@ -297,9 +297,7 @@ class _ContestDashboardState extends State<ContestDashboard> {
                 color: isSelected ? _primary : _muted,
               ),
             ),
-
             const SizedBox(height: 3),
-
             Text(
               title,
               maxLines: 1,

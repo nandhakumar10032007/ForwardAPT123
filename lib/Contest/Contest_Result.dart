@@ -6,9 +6,13 @@ import 'package:flutter/material.dart';
 class ContestResult extends StatelessWidget {
   final String contestId;
 
+  /// True when viewing a completed contest in read-only practice mode.
+  final bool isPracticeMode;
+
   const ContestResult({
     super.key,
     required this.contestId,
+    this.isPracticeMode = false,
   });
 
   // ForwardAPT theme
@@ -49,20 +53,62 @@ class ContestResult extends StatelessWidget {
       );
     }
 
-    final summaryReference = FirebaseFirestore.instance
+    final registrationReference = FirebaseFirestore.instance
         .collection('Contest_Questions')
         .doc(contestId)
         .collection('Registered')
-        .doc(user.uid)
+        .doc(user.uid);
+
+    final summaryReference = registrationReference
         .collection('Result')
         .doc('Summary');
 
     return Scaffold(
       backgroundColor: _background,
       body: SafeArea(
-        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: summaryReference.snapshots(),
-          builder: (context, snapshot) {
+        child: isPracticeMode
+            ? StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: registrationReference.snapshots(),
+                builder: (context, registrationSnapshot) {
+                  if (registrationSnapshot.connectionState ==
+                      ConnectionState.waiting) {
+                    return const Center(
+                      child: CircularProgressIndicator(color: _primary),
+                    );
+                  }
+
+                  if (registrationSnapshot.hasError) {
+                    return const Center(
+                      child: Text(
+                        'Unable to check your original contest attendance.',
+                        style: TextStyle(color: _muted),
+                        textAlign: TextAlign.center,
+                      ),
+                    );
+                  }
+
+                  // A user who never registered has no personal result.
+                  // Show a zero-valued practice summary without attempting
+                  // to read a missing Registered/{uid}/Result/Summary doc.
+                  if (!registrationSnapshot.hasData ||
+                      !registrationSnapshot.data!.exists) {
+                    return _buildNotAttendedResult();
+                  }
+
+                  return _buildSummaryStream(summaryReference);
+                },
+              )
+            : _buildSummaryStream(summaryReference),
+      ),
+    );
+  }
+
+  Widget _buildSummaryStream(
+    DocumentReference<Map<String, dynamic>> summaryReference,
+  ) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: summaryReference.snapshots(),
+      builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(
                 child: CircularProgressIndicator(
@@ -97,6 +143,29 @@ class ContestResult extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  if (isPracticeMode) ...[
+                    const Text(
+                      'PRACTICE MODE',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: .6,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Original contest result — read only',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: _muted,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   // HEADER
                   const Text(
                     'Your Contest Results 🏆',
@@ -141,8 +210,77 @@ class ContestResult extends StatelessWidget {
                 ],
               ),
             );
-          },
-        ),
+      },
+    );
+  }
+
+  Widget _buildNotAttendedResult() {
+    final zeroData = <String, dynamic>{
+      'Easy_Total_Mark': 0,
+      'Medium_Total_Mark': 0,
+      'Hard_Total_Mark': 0,
+      'Easy_Total_Penalty_Mark': 0,
+      'Medium_Total_Penalty_Mark': 0,
+      'Hard_Total_Penalty_Mark': 0,
+      'Bonus_Point': 0,
+      'Final_Score': 0,
+    };
+
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            'Your Contest Results 🏆',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _text,
+              fontSize: 23,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'PRACTICE MODE',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _primary,
+              fontSize: 12,
+              fontWeight: FontWeight.w900,
+              letterSpacing: .6,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Not Attended',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _muted,
+              fontSize: 17,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'You can practice these questions, but you did not attend the original contest. These values are not an official result.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: _muted,
+              fontSize: 13,
+              height: 1.45,
+            ),
+          ),
+          const SizedBox(height: 26),
+          _buildMarksSection(zeroData),
+          const SizedBox(height: 20),
+          _buildPenaltySection(zeroData),
+          const SizedBox(height: 20),
+          _buildBonusSection(zeroData),
+          const SizedBox(height: 20),
+          _buildScoreSection(zeroData),
+        ],
       ),
     );
   }
