@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'Contest_Questions_Screen.dart';
 import 'Contest_Solving_Screen.dart';
 import 'Contest_Result.dart';
+import 'Contest_Leaderboard_Screen.dart';
 
 class ContestDashboard extends StatefulWidget {
   final String contestId;
@@ -118,9 +119,8 @@ class _ContestDashboardState extends State<ContestDashboard> {
         ),
 
         // TAB 4: LEADERBOARD
-        _buildComingSoonPage(
-          title: 'Leaderboard',
-          icon: Icons.emoji_events_rounded,
+        ContestLeaderboardScreen(
+          contestId: widget.contestId,
         ),
       ],
     );

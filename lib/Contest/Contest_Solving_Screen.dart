@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -31,6 +33,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   final FocusNode _answerFocusNode = FocusNode();
   final Map<String, String> _answers = {};
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _questionsStream;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _progressSubscription;
   List<QueryDocumentSnapshot<Map<String, dynamic>>> _questions = [];
   int _currentIndex = 0;
   bool _loadedInitialSelection = false;
@@ -48,6 +51,35 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         .doc(widget.contestId)
         .collection('Questions')
         .snapshots();
+
+    // Restore solved-question state from Firestore whenever this screen opens.
+    // This listener also keeps the solving UI synchronized with live progress.
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid != null) {
+      _progressSubscription = FirebaseFirestore.instance
+          .collection('Contest_Questions')
+          .doc(widget.contestId)
+          .collection('Registered')
+          .doc(uid)
+          .collection('Result')
+          .snapshots()
+          .listen((snapshot) {
+        if (!mounted) return;
+
+        final solvedIds = snapshot.docs
+            .where((doc) =>
+                (doc.data()['Status'] ?? '').toString().toLowerCase() ==
+                'solved')
+            .map((doc) => doc.id)
+            .toSet();
+
+        setState(() {
+          _solvedQuestionIds
+            ..clear()
+            ..addAll(solvedIds);
+        });
+      });
+    }
   }
 
   @override
@@ -62,6 +94,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   @override
   void dispose() {
     _saveCurrentAnswer();
+    _progressSubscription?.cancel();
     _answerController.dispose();
     _answerFocusNode.dispose();
     super.dispose();
@@ -184,6 +217,17 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   Future<void> _submitAnswer() async {
     final questionId = _currentQuestionId;
     if (questionId == null || _isSubmitting) return;
+
+    // Firestore progress is authoritative; never submit an already-solved question.
+    if (_solvedQuestionIds.contains(questionId)) {
+      setState(() {
+        _answerController.clear();
+        _answers.remove(questionId);
+        _isAnswerInvalid = false;
+        _answerLabel = 'This question is already solved.';
+      });
+      return;
+    }
 
     final answer = _answerController.text.trim();
     if (answer.isEmpty) {
