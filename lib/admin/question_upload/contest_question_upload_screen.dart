@@ -274,7 +274,7 @@ class _ContestQuestionUploadScreenState
           'Decimal',
           'Fraction',
           'Percentage',
-          'Radio',
+          'Ratio',
         ].contains(answerType)) {
           _validationErrors.add(
             'Excel row $excelRow: Invalid answer type "$answerType".',
@@ -397,8 +397,8 @@ class _ContestQuestionUploadScreenState
         return 'Fraction';
       case 'percentage':
         return 'Percentage';
-      case 'radio':
-        return 'Radio';
+      case 'ratio':
+        return 'Ratio';
       default:
         return value.trim();
     }

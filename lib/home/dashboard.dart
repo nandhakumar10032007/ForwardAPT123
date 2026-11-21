@@ -1,13 +1,15 @@
+
 import 'package:flutter/material.dart';
+
 import '../Contest/Contest_Home_Screen.dart';
+import '../Daily_question/daily_question_solving_screen.dart';
 import 'home_screen.dart';
 
 class Dashboard extends StatefulWidget {
   const Dashboard({super.key});
 
   @override
-  State<Dashboard> createState() =>
-      _DashboardState();
+  State<Dashboard> createState() => _DashboardState();
 }
 
 class _DashboardState extends State<Dashboard> {
@@ -21,15 +23,16 @@ class _DashboardState extends State<Dashboard> {
 
     _pages = [
       const HomeScreen(),
+
       const ContestHomeScreen(),
+
       const _PlaceholderPage(
         title: 'Custom Test',
         icon: Icons.edit_note_rounded,
       ),
-      const _PlaceholderPage(
-        title: 'Daily Problem',
-        icon: Icons.today_rounded,
-      ),
+
+      // DAILY QUESTIONS
+      const DailyQuestionSolvingScreen(),
     ];
   }
 
@@ -42,16 +45,14 @@ class _DashboardState extends State<Dashboard> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xFFF7F8FC),
+      backgroundColor: const Color(0xFFF7F8FC),
 
       body: IndexedStack(
         index: _currentIndex,
         children: _pages,
       ),
 
-      bottomNavigationBar:
-          _buildBottomNavigationBar(),
+      bottomNavigationBar: _buildBottomNavigationBar(),
     );
   }
 
@@ -70,8 +71,10 @@ class _DashboardState extends State<Dashboard> {
           ),
         ),
       ),
+
       child: SafeArea(
         top: false,
+
         child: NavigationBar(
           height: 72,
 
@@ -81,17 +84,16 @@ class _DashboardState extends State<Dashboard> {
 
           selectedIndex: _currentIndex,
 
-          onDestinationSelected:
-              _onNavigationItemSelected,
+          onDestinationSelected: _onNavigationItemSelected,
 
-          indicatorColor:
-              const Color(0xFFEDEBFF),
+          indicatorColor: const Color(0xFFEDEBFF),
 
           labelBehavior:
-              NavigationDestinationLabelBehavior
-                  .alwaysShow,
+              NavigationDestinationLabelBehavior.alwaysShow,
 
           destinations: const [
+
+            // HOME
             NavigationDestination(
               icon: Icon(
                 Icons.home_outlined,
@@ -104,6 +106,7 @@ class _DashboardState extends State<Dashboard> {
               label: 'Home',
             ),
 
+            // CONTEST
             NavigationDestination(
               icon: Icon(
                 Icons.emoji_events_outlined,
@@ -116,6 +119,7 @@ class _DashboardState extends State<Dashboard> {
               label: 'Contest',
             ),
 
+            // CUSTOM TEST
             NavigationDestination(
               icon: Icon(
                 Icons.edit_note_outlined,
@@ -128,6 +132,7 @@ class _DashboardState extends State<Dashboard> {
               label: 'Custom Test',
             ),
 
+            // DAILY QUESTIONS
             NavigationDestination(
               icon: Icon(
                 Icons.today_outlined,
@@ -147,7 +152,7 @@ class _DashboardState extends State<Dashboard> {
 }
 
 // ============================================================
-// TEMPORARY PLACEHOLDER
+// TEMPORARY CUSTOM TEST PLACEHOLDER
 // ============================================================
 
 class _PlaceholderPage extends StatelessWidget {
@@ -162,28 +167,27 @@ class _PlaceholderPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor:
-          const Color(0xFFF7F8FC),
+      backgroundColor: const Color(0xFFF7F8FC),
 
       body: Center(
         child: Column(
-          mainAxisAlignment:
-              MainAxisAlignment.center,
+          mainAxisAlignment: MainAxisAlignment.center,
+
           children: [
+
             Container(
               width: 75,
               height: 75,
+
               decoration: BoxDecoration(
-                color:
-                    const Color(0xFFEDEBFF),
-                borderRadius:
-                    BorderRadius.circular(22),
+                color: const Color(0xFFEDEBFF),
+                borderRadius: BorderRadius.circular(22),
               ),
+
               child: Icon(
                 icon,
                 size: 38,
-                color:
-                    const Color(0xFF4F46E5),
+                color: const Color(0xFF4F46E5),
               ),
             ),
 
