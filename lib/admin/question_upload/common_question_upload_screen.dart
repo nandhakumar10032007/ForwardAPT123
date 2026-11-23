@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '/Topics.dart';
 import '../../models/question_model.dart';
 import '../../services/question_import_service.dart';
 
@@ -27,6 +28,8 @@ class _CommonQuestionUploadScreenState
   Uint8List? _excelBytes;
   String? _fileName;
 
+  String? _selectedTopic;
+
   QuestionImportResult? _preview;
 
   bool _isLoading = false;
@@ -37,13 +40,34 @@ class _CommonQuestionUploadScreenState
 
   int get _acceptedCount => _preview?.acceptedCount ?? 0;
 
+  Future<void> _selectTopic(String? topic) async {
+    if (topic == null || _isLoading || _isUploading) return;
+
+    setState(() {
+      _selectedTopic = topic;
+      _preview = null;
+    });
+
+    if (_excelBytes != null) {
+      await _generatePreview();
+    }
+  }
+
   Future<void> _selectExcelFile() async {
+    if (_selectedTopic == null) {
+      _showMessage(
+        'Please select a topic first.',
+        isError: true,
+      );
+      return;
+    }
+
     try {
       final result = await FilePicker.pickFiles(
-       type: FileType.custom,
-       allowedExtensions: const ['xlsx'],
-       withData: true,
-       allowMultiple: false,
+        type: FileType.custom,
+        allowedExtensions: const ['xlsx','pdf'],
+        withData: true,
+        allowMultiple: false,
       );
 
       if (result == null || result.files.isEmpty) {
@@ -78,6 +102,15 @@ class _CommonQuestionUploadScreenState
 
   Future<void> _generatePreview() async {
     final bytes = _excelBytes;
+    final topic = _selectedTopic;
+
+    if (topic == null) {
+      _showMessage(
+        'Please select a topic first.',
+        isError: true,
+      );
+      return;
+    }
 
     if (bytes == null) {
       _showMessage(
@@ -96,6 +129,7 @@ class _CommonQuestionUploadScreenState
       final result = await _importService.previewExcel(
         bytes: bytes,
         category: _category,
+        selectedTopic: topic,
       );
 
       if (!mounted) return;
@@ -152,6 +186,7 @@ class _CommonQuestionUploadScreenState
           title: const Text('Confirm Upload'),
           content: Text(
             'Ready to upload ${preview.acceptedCount} common questions?\n\n'
+            'Topic: $_selectedTopic\n'
             'Duplicates: ${preview.duplicateCount}\n'
             'Rejected rows: ${preview.rejectedCount}\n\n'
             'Only accepted questions will be uploaded.',
@@ -181,18 +216,16 @@ class _CommonQuestionUploadScreenState
     await _uploadQuestions();
   }
 
-  /// Saves the questions and advances the global counter atomically.
+  /// Saves questions and advances the global counter atomically.
   ///
-  /// The question documents and counter update are committed together.
-  /// If the transaction fails, neither the counter nor these documents
-  /// are changed.
-  ///
-  /// The transaction is limited to 499 questions because it also writes
-  /// the global counter document.
+  /// Question documents and counter updates are committed together.
+  /// The transaction is limited to 499 questions because it also
+  /// writes the global counter document.
   Future<void> _uploadQuestions() async {
     final preview = _preview;
+    final topic = _selectedTopic;
 
-    if (preview == null) return;
+    if (preview == null || topic == null) return;
 
     final drafts = preview.acceptedQuestions;
 
@@ -211,17 +244,20 @@ class _CommonQuestionUploadScreenState
     });
 
     try {
-      // Recheck the file against current Firestore data immediately
-      // before uploading. This also refreshes the preview statuses.
+      // Recheck the file against current Firestore data
+      // immediately before uploading.
       final bytes = _excelBytes;
 
       if (bytes == null) {
-        throw StateError('The selected Excel file is no longer available.');
+        throw StateError(
+          'The selected Excel file is no longer available.',
+        );
       }
 
       final refreshedPreview = await _importService.previewExcel(
         bytes: bytes,
         category: _category,
+        selectedTopic: topic,
       );
 
       if (!mounted) return;
@@ -230,7 +266,8 @@ class _CommonQuestionUploadScreenState
         _preview = refreshedPreview;
       });
 
-      final refreshedDrafts = refreshedPreview.acceptedQuestions;
+      final refreshedDrafts =
+          refreshedPreview.acceptedQuestions;
 
       if (refreshedDrafts.isEmpty) {
         _showMessage(
@@ -266,7 +303,8 @@ class _CommonQuestionUploadScreenState
         final newLastQuestionNo =
             lastQuestionNo + refreshedDrafts.length;
 
-        final questionRefs = <DocumentReference<Map<String, dynamic>>>[];
+        final questionRefs =
+            <DocumentReference<Map<String, dynamic>>>[];
 
         final questionsToSave = <QuestionModel>[];
 
@@ -294,11 +332,10 @@ class _CommonQuestionUploadScreenState
           );
         }
 
-        // Check that none of the generated document IDs already exists.
-        // All reads must happen before transaction writes.
+        // Check that generated document IDs do not already exist.
+        // All reads happen before transaction writes.
         for (final documentRef in questionRefs) {
-          final existing =
-              await transaction.get(documentRef);
+          final existing = await transaction.get(documentRef);
 
           if (existing.exists) {
             throw StateError(
@@ -308,8 +345,7 @@ class _CommonQuestionUploadScreenState
           }
         }
 
-        // Reserve the numbers and save all questions in the same
-        // transaction, so the counter cannot advance independently.
+        // Reserve question numbers and save questions atomically.
         transaction.set(
           counterRef,
           {
@@ -428,6 +464,10 @@ class _CommonQuestionUploadScreenState
 
               const SizedBox(height: 20),
 
+              _buildTopicCard(),
+
+              const SizedBox(height: 16),
+
               _buildFilePickerCard(),
 
               const SizedBox(height: 16),
@@ -523,7 +563,8 @@ class _CommonQuestionUploadScreenState
             const SizedBox(height: 8),
             const Text(
               'Import aptitude questions from an Excel .xlsx file. '
-              'Review the validation results before saving them.',
+              'Select a topic and review the validation results '
+              'before saving them.',
             ),
           ],
         ),
@@ -531,7 +572,72 @@ class _CommonQuestionUploadScreenState
     );
   }
 
+  Widget _buildTopicCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Select Question Topic',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            const SizedBox(height: 8),
+
+            const Text(
+              'All questions in this Excel file will be assigned '
+              'to the selected topic.',
+            ),
+
+            const SizedBox(height: 16),
+
+            DropdownButtonFormField<String>(
+              value: _selectedTopic,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Topic',
+                hintText: 'Choose a topic',
+                prefixIcon: Icon(Icons.category_outlined),
+                border: OutlineInputBorder(),
+              ),
+              items: Topics.all.map((topic) {
+                return DropdownMenuItem<String>(
+                  value: topic,
+                  child: Text(
+                    topic,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                );
+              }).toList(),
+              onChanged: _isLoading || _isUploading
+                  ? null
+                  : _selectTopic,
+            ),
+
+            if (_selectedTopic != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Selected: $_selectedTopic',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.primary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildFilePickerCard() {
+    final topicSelected = _selectedTopic != null;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(20),
@@ -549,8 +655,15 @@ class _CommonQuestionUploadScreenState
             const SizedBox(height: 8),
 
             const Text(
-              'Required columns: title, question, topic, difficulty, '
-              'answerType, correctAnswer',
+              'Required columns: title, question, difficulty, '
+              'correctAnswer',
+            ),
+
+            const SizedBox(height: 8),
+
+            const Text(
+              'Topic is selected above. Answer type is detected '
+              'automatically from the correct answer.',
             ),
 
             const SizedBox(height: 16),
@@ -585,17 +698,30 @@ class _CommonQuestionUploadScreenState
 
             FilledButton.icon(
               onPressed:
-                  _isLoading || _isUploading
+                  !topicSelected || _isLoading || _isUploading
                       ? null
                       : _selectExcelFile,
               icon: const Icon(Icons.folder_open),
               label: const Text('Select Excel File'),
             ),
 
+            if (!topicSelected) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Please select a topic before choosing an Excel file.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.orange,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+
             const SizedBox(height: 8),
 
             OutlinedButton.icon(
               onPressed: _excelBytes == null ||
+                      !topicSelected ||
                       _isLoading ||
                       _isUploading
                   ? null
@@ -701,7 +827,8 @@ class _CommonQuestionUploadScreenState
           ),
           SizedBox(height: 5),
           Text(
-            'Review the status and message for each Excel row.',
+            'Review the status, detected answer type and '
+            'validation message for each Excel row.',
           ),
         ],
       ),
@@ -710,7 +837,6 @@ class _CommonQuestionUploadScreenState
 
   Widget _buildPreviewRow(QuestionImportRow row) {
     final statusColor = _statusColor(row.status);
-
     final draft = row.question;
 
     return Card(

@@ -5,10 +5,18 @@ import 'package:excel/excel.dart' hide Border;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../Topics.dart';
+import '../../services/answer_type_service.dart';
+
 /// Admin uploader for date-wise Daily Questions.
 ///
-/// Excel columns (NO date column):
-/// title, question, topic, difficulty, answerType, correctAnswer
+/// Excel columns (NO date or topic required):
+/// title, question, difficulty, correctAnswer
+///
+/// Topic is selected separately for each question in the preview dropdown.
+/// An optional topic column can preselect matching master topics.
+/// Answer types are detected automatically from correctAnswer.
+/// An old answerType Excel column may remain, but it is ignored.
 ///
 /// The selected Year + Month + Starting Day determine each question's date.
 /// Example: November 2026 + starting day 11:
@@ -49,6 +57,7 @@ class _DailyQuestionUploadScreenState
   final List<String> _errors = [];
 
   int? _selectedMonth;
+  String? _selectedTopic;
   bool _isReading = false;
   bool _isUploading = false;
 
@@ -92,6 +101,7 @@ class _DailyQuestionUploadScreenState
   bool get _isValid =>
       _hasValidSchedule &&
       _questions.isNotEmpty &&
+      _selectedTopic != null &&
       _errors.isEmpty &&
       _lastAssignedDay <= _daysInSelectedMonth;
 
@@ -175,16 +185,17 @@ class _DailyQuestionUploadScreenState
         throw const FormatException('The first worksheet is empty.');
       }
 
-      final headers = sheet.rows.first
+      // Read headers defensively. Excel files sometimes contain formatted
+      // blank cells/rows; those must not cause a null-check crash.
+      final headerRow = sheet.rows.first;
+      final headers = headerRow
           .map((cell) => _normalizeHeader(_cellText(cell)))
           .toList();
 
       const requiredHeaders = [
         'title',
         'question',
-        'topic',
         'difficulty',
-        'answertype',
         'correctanswer',
       ];
 
@@ -194,7 +205,6 @@ class _DailyQuestionUploadScreenState
         }
       }
 
-      // A date column is deliberately not accepted/required.
       if (headers.contains('date')) {
         _errors.add(
           'Remove the date column from Excel. Dates are assigned '
@@ -202,10 +212,13 @@ class _DailyQuestionUploadScreenState
         );
       }
 
+      if (headers.where((header) => header == 'answertype').length > 1) {
+        _errors.add('Duplicate Excel column: answertype');
+      }
+
       if (_errors.isNotEmpty) return;
 
       final columnIndexes = <String, int>{};
-
       for (var i = 0; i < headers.length; i++) {
         if (requiredHeaders.contains(headers[i])) {
           if (columnIndexes.containsKey(headers[i])) {
@@ -218,37 +231,48 @@ class _DailyQuestionUploadScreenState
 
       if (_errors.isNotEmpty) return;
 
+      // Confirm every required column has a usable index before reading rows.
+      for (final header in requiredHeaders) {
+        if (!columnIndexes.containsKey(header)) {
+          _errors.add('Could not locate the "$header" column.');
+        }
+      }
+      if (_errors.isNotEmpty) return;
+
       final parsedQuestions = <_DailyQuestionDraft>[];
       final seenQuestions = <String>{};
 
       for (var rowIndex = 1; rowIndex < sheet.rows.length; rowIndex++) {
         final cells = sheet.rows[rowIndex];
 
-        if (cells.every((cell) => _cellText(cell).trim().isEmpty)) {
-          continue;
+        // Skip fully empty rows, including trailing formatted rows.
+        var hasContent = false;
+        for (final cell in cells) {
+          if (_cellText(cell).trim().isNotEmpty) {
+            hasContent = true;
+            break;
+          }
         }
+        if (!hasContent) continue;
 
         String valueOf(String column) {
-          final index = columnIndexes[column]!;
-          if (index >= cells.length) return '';
+          final index = columnIndexes[column];
+          if (index == null || index < 0 || index >= cells.length) {
+            return '';
+          }
           return _cellText(cells[index]).trim();
         }
 
         final excelRow = rowIndex + 1;
         final title = valueOf('title');
         final question = valueOf('question');
-        final topic = valueOf('topic');
         final difficulty = _canonicalDifficulty(valueOf('difficulty'));
-        final answerType = _canonicalAnswerType(valueOf('answertype'));
         final correctAnswer = valueOf('correctanswer');
 
-        if (title.isEmpty ||
-            question.isEmpty ||
-            topic.isEmpty ||
-            correctAnswer.isEmpty) {
+        if (title.isEmpty || question.isEmpty || correctAnswer.isEmpty) {
           _errors.add(
-            'Excel row $excelRow: title, question, topic and '
-            'correctAnswer must not be empty.',
+            'Excel row $excelRow: title, question and correctAnswer '
+            'must not be empty.',
           );
           continue;
         }
@@ -260,15 +284,11 @@ class _DailyQuestionUploadScreenState
           continue;
         }
 
-        if (![
-          'Integer',
-          'Decimal',
-          'Fraction',
-          'Percentage',
-          'Radio',
-        ].contains(answerType)) {
+        final answerType = AnswerTypeService.detect(correctAnswer);
+        if (answerType == null) {
           _errors.add(
-            'Excel row $excelRow: invalid answerType "$answerType".',
+            'Excel row $excelRow: could not detect the answer type from '
+            '"$correctAnswer". Check the answer format.',
           );
           continue;
         }
@@ -290,7 +310,6 @@ class _DailyQuestionUploadScreenState
             excelRow: excelRow,
             title: title,
             question: question,
-            topic: topic,
             difficulty: difficulty,
             answerType: answerType,
             correctAnswer: correctAnswer,
@@ -335,8 +354,10 @@ class _DailyQuestionUploadScreenState
   }
 
   String _cellText(Data? cell) {
-    if (cell == null || cell.value == null) return '';
-    return cell.value.toString();
+    if (cell == null) return '';
+    final value = cell.value;
+    if (value == null) return '';
+    return value.toString();
   }
 
   String _canonicalDifficulty(String value) {
@@ -353,29 +374,6 @@ class _DailyQuestionUploadScreenState
   }
 
  
-String _canonicalAnswerType(String value) {
-  switch (value.trim().toLowerCase()) {
-    case 'integer':
-      return 'Integer';
-
-    case 'decimal':
-      return 'Decimal';
-
-    case 'fraction':
-      return 'Fraction';
-
-    case 'percentage':
-      return 'Percentage';
-
-    case 'radio':
-    case 'ratio':
-      return 'Radio';
-
-    default:
-      return value.trim();
-  }
-}
-
   // ---------------------------------------------------------------------------
   // DATE AND QUESTION NUMBER HELPERS
   // ---------------------------------------------------------------------------
@@ -571,7 +569,7 @@ String _canonicalAnswerType(String value) {
             'questionNo': questionNo,
             'title': draft.title,
             'question': draft.question,
-            'topic': draft.topic,
+            'topic': _selectedTopic!,
             'difficulty': draft.difficulty,
             'answerType': draft.answerType,
             'correctAnswer': draft.correctAnswer,
@@ -830,6 +828,32 @@ String _canonicalAnswerType(String value) {
               ),
               onChanged: (_) => _clearSelectedFile(),
             ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              value: _selectedTopic,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Topic (applies to all questions)',
+                helperText: 'Select one topic for every question in this Excel file.',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.category_outlined),
+              ),
+              items: Topics.all
+                  .map(
+                    (topic) => DropdownMenuItem<String>(
+                      value: topic,
+                      child: Text(topic),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _isUploading
+                  ? null
+                  : (value) {
+                      setState(() {
+                        _selectedTopic = value;
+                      });
+                    },
+            ),
             if (_selectedMonth != null && _year >= 2000) ...[
               const SizedBox(height: 10),
               Text(
@@ -869,13 +893,14 @@ String _canonicalAnswerType(String value) {
             ),
             const SizedBox(height: 8),
             const Text(
-              'Required columns: title, question, topic, difficulty, '
-              'answerType, correctAnswer',
+              'Required columns: title, question, difficulty, correctAnswer',
             ),
             const SizedBox(height: 6),
             const Text(
-              'Do not add a date column. The selected starting day '
-              'assigns dates automatically.',
+              'Select one topic above. That topic will be applied to every '
+              'question in this Excel file. Excel topic and answerType columns '
+              'are not required. Answer type is detected automatically from '
+              'correctAnswer. Do not add a date column.',
             ),
             const SizedBox(height: 14),
             if (_fileName != null) ...[
@@ -1050,8 +1075,8 @@ String _canonicalAnswerType(String value) {
                     spacing: 7,
                     runSpacing: 5,
                     children: [
-                      Chip(label: Text(question.topic)),
-                      Chip(label: Text(question.answerType)),
+                      Chip(label: Text('Topic: ${_selectedTopic ?? 'Not selected'}')),
+                      Chip(label: Text('Answer type: ${question.answerType}')),
                     ],
                   ),
                   Text(
@@ -1113,16 +1138,14 @@ class _DailyQuestionDraft {
   final int excelRow;
   final String title;
   final String question;
-  final String topic;
   final String difficulty;
   final String answerType;
   final String correctAnswer;
 
-  const _DailyQuestionDraft({
+  _DailyQuestionDraft({
     required this.excelRow,
     required this.title,
     required this.question,
-    required this.topic,
     required this.difficulty,
     required this.answerType,
     required this.correctAnswer,

@@ -4,6 +4,9 @@ import 'dart:typed_data';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:excel/excel.dart';
 
+import '../Topics.dart';
+import 'answer_type_service.dart';
+
 /// A question parsed from Excel before it receives a global question number.
 class ImportedQuestionDraft {
   final int excelRow;
@@ -86,12 +89,11 @@ class QuestionImportService {
     'test': 'testQuestions',
   };
 
+  /// Only four columns are required in Excel.
   static const Set<String> _requiredHeaders = {
     'title',
     'question',
-    'topic',
     'difficulty',
-    'answertype',
     'correctanswer',
   };
 
@@ -101,23 +103,17 @@ class QuestionImportService {
     'hard',
   };
 
-  static const Set<String> _allowedAnswerTypes = {
-    'integer',
-    'decimal',
-    'fraction',
-    'percentage',
-    'radio',
-  };
-
   /// Reads an Excel .xlsx file and prepares a preview.
   ///
   /// Expected columns:
-  /// title, question, topic, difficulty, answerType, correctAnswer
+  /// title, question, difficulty, correctAnswer
   ///
-  /// Question numbers and createdAt are assigned later.
+  /// Topic is supplied separately by the admin dropdown.
+  /// Answer type is detected automatically.
   Future<QuestionImportResult> previewExcel({
     required Uint8List bytes,
     required String category,
+    required String selectedTopic,
   }) async {
     final normalizedCategory = category.trim().toLowerCase();
 
@@ -130,7 +126,18 @@ class QuestionImportService {
     }
 
     if (bytes.isEmpty) {
-      throw const FormatException('The selected Excel file is empty.');
+      throw const FormatException(
+        'The selected Excel file is empty.',
+      );
+    }
+
+    // Validate and standardize the selected topic.
+    final canonicalTopic = _canonicalTopic(selectedTopic);
+
+    if (canonicalTopic == null) {
+      throw ArgumentError(
+        'Please select a valid topic from the topic list.',
+      );
     }
 
     final Excel workbook;
@@ -158,6 +165,7 @@ class QuestionImportService {
       );
     }
 
+    // Read and normalize Excel headers.
     final headerRow = sheet.rows.first;
 
     final headers = headerRow.map((cell) {
@@ -172,7 +180,7 @@ class QuestionImportService {
       throw FormatException(
         'Missing required Excel columns: '
         '${missingHeaders.join(', ')}. '
-        'Please check the first row of your worksheet.',
+        'Required columns are: title, question, difficulty, correctAnswer.',
       );
     }
 
@@ -192,7 +200,7 @@ class QuestionImportService {
       }
     }
 
-    // Load existing question text from the selected category.
+    // Load existing questions from the selected Firestore collection.
     final existingSnapshot = await _firestore
         .collection(collectionName)
         .get();
@@ -203,15 +211,18 @@ class QuestionImportService {
       final data = document.data();
       final existingText = data['question'];
 
-      if (existingText is String && existingText.trim().isNotEmpty) {
-        existingQuestionKeys.add(_normalizeQuestion(existingText));
+      if (existingText is String &&
+          existingText.trim().isNotEmpty) {
+        existingQuestionKeys.add(
+          _normalizeQuestion(existingText),
+        );
       }
     }
 
     final seenInFile = <String>{};
     final results = <QuestionImportRow>[];
 
-    // Row 1 contains headers, so Excel data starts at row 2.
+    // Row 1 contains headers, so data starts at row 2.
     for (var index = 1; index < sheet.rows.length; index++) {
       final cells = sheet.rows[index];
       final excelRowNumber = index + 1;
@@ -232,18 +243,20 @@ class QuestionImportService {
 
       final title = valueOf('title');
       final questionText = valueOf('question');
-      final topic = valueOf('topic');
       final difficulty = valueOf('difficulty');
-      final answerType = valueOf('answertype');
       final correctAnswer = valueOf('correctanswer');
+
+      // Automatically detect answer type.
+      final detectedAnswerType =
+          AnswerTypeService.detect(correctAnswer);
 
       final validationError = _validateQuestion(
         title: title,
         question: questionText,
-        topic: topic,
+        topic: canonicalTopic,
         difficulty: difficulty,
-        answerType: answerType,
         correctAnswer: correctAnswer,
+        detectedAnswerType: detectedAnswerType,
       );
 
       if (validationError != null) {
@@ -261,6 +274,7 @@ class QuestionImportService {
 
       final questionKey = _normalizeQuestion(questionText);
 
+      // Check duplicates in Firestore.
       if (existingQuestionKeys.contains(questionKey)) {
         results.add(
           QuestionImportRow(
@@ -275,6 +289,7 @@ class QuestionImportService {
         continue;
       }
 
+      // Check duplicates inside the selected Excel file.
       if (!seenInFile.add(questionKey)) {
         results.add(
           QuestionImportRow(
@@ -293,9 +308,9 @@ class QuestionImportService {
         excelRow: excelRowNumber,
         title: title,
         question: questionText,
-        topic: topic,
+        topic: canonicalTopic,
         difficulty: _canonicalDifficulty(difficulty),
-        answerType: _canonicalAnswerType(answerType),
+        answerType: detectedAnswerType!,
         correctAnswer: correctAnswer,
       );
 
@@ -304,7 +319,8 @@ class QuestionImportService {
           excelRow: excelRowNumber,
           question: draft,
           status: 'Accepted',
-          message: 'Ready to upload.',
+          message: 'Ready to upload. '
+              'Detected answer type: $detectedAnswerType.',
         ),
       );
     }
@@ -315,13 +331,14 @@ class QuestionImportService {
     );
   }
 
+  /// Validates all required question fields.
   String? _validateQuestion({
     required String title,
     required String question,
     required String topic,
     required String difficulty,
-    required String answerType,
     required String correctAnswer,
+    required String? detectedAnswerType,
   }) {
     if (title.isEmpty) {
       return 'Title is required.';
@@ -339,21 +356,35 @@ class QuestionImportService {
       return 'Difficulty is required.';
     }
 
-    if (!_allowedDifficulties.contains(difficulty.toLowerCase())) {
+    if (!_allowedDifficulties.contains(
+      difficulty.trim().toLowerCase(),
+    )) {
       return 'Difficulty must be Easy, Medium, or Hard.';
-    }
-
-    if (answerType.isEmpty) {
-      return 'Answer type is required.';
-    }
-
-    if (!_allowedAnswerTypes.contains(answerType.toLowerCase())) {
-      return 'Answer type must be Integer, Decimal, Fraction, '
-          'Percentage, or Radio.';
     }
 
     if (correctAnswer.isEmpty) {
       return 'Correct answer is required.';
+    }
+
+    if (detectedAnswerType == null) {
+      return 'Invalid correct answer format. '
+          'Please check the supported answer types.';
+    }
+
+    return null;
+  }
+
+  /// Finds the official topic name from Topics.all.
+  /// Matching ignores capitalization and surrounding whitespace.
+  String? _canonicalTopic(String value) {
+    final normalized = value.trim().toLowerCase();
+
+    if (normalized.isEmpty) return null;
+
+    for (final topic in Topics.all) {
+      if (topic.trim().toLowerCase() == normalized) {
+        return topic;
+      }
     }
 
     return null;
@@ -380,27 +411,13 @@ class QuestionImportService {
     switch (value.trim().toLowerCase()) {
       case 'easy':
         return 'Easy';
+
       case 'medium':
         return 'Medium';
+
       case 'hard':
         return 'Hard';
-      default:
-        return value.trim();
-    }
-  }
 
-  String _canonicalAnswerType(String value) {
-    switch (value.trim().toLowerCase()) {
-      case 'integer':
-        return 'Integer';
-      case 'decimal':
-        return 'Decimal';
-      case 'fraction':
-        return 'Fraction';
-      case 'percentage':
-        return 'Percentage';
-      case 'radio':
-        return 'Radio';
       default:
         return value.trim();
     }
@@ -415,6 +432,8 @@ class QuestionImportService {
   }
 
   bool _isEmptyRow(List<Data?> cells) {
-    return cells.every((cell) => _cellText(cell).trim().isEmpty);
+    return cells.every(
+      (cell) => _cellText(cell).trim().isEmpty,
+    );
   }
 }

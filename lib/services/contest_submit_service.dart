@@ -1,6 +1,10 @@
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:math' as math;
+
+import '../answer_type.dart';
+import 'answer_type_service.dart';
 
 enum ContestSubmissionStatus {
   invalidFormat,
@@ -317,9 +321,6 @@ class ContestSubmitService {
                 newHardPenalty +
                 bonus;
 
-            final solvedQuestions =
-                List<String>.from(summaryData['Solved_Questions'] ?? []);
-
             final profileData = profileSnapshot.data() ?? {};
             final profileSolved = List<String>.from(
               profileData['Solved_Questions'] ?? [],
@@ -536,90 +537,50 @@ class ContestSubmitService {
   // ANSWER FORMAT VALIDATION
   // =========================================================
 
-  bool isValidFormat(String answer, String answerType) {
-    final value = answer.trim();
+  /// Normalize values saved in Firestore to the central AnswerType values.
+  /// This also accepts older aliases used by previous question uploads.
+  String _normalizeAnswerType(String rawType) {
+    final compact = rawType
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s_-]+'), '');
 
-    switch (answerType.replaceAll('_', ' ').replaceAll(' ', '').toLowerCase()) {
+    switch (compact) {
       case 'integer':
-        return RegExp(r'^[+-]?\d+$').hasMatch(value);
-
-      case 'decimal':
-        return RegExp(
-          r'^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$',
-        ).hasMatch(value);
-
+        return AnswerType.integer;
       case 'percentage':
-        return RegExp(
-          r'^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*%?$',
-        ).hasMatch(value);
-
-      case 'fraction':
-        return _isValidFraction(value);
-
-      case 'mixedfraction':
-      case 'mixednumber':
-        return _isValidMixedFraction(value);
-
+      case 'percent':
+        return AnswerType.percentage;
       case 'ratio':
-        return _isValidRatio(value);
-
+      case 'radio':
+        return AnswerType.ratio;
+      case 'decimal':
+        return AnswerType.decimal;
+      case 'fraction':
+        return AnswerType.fraction;
+      case 'mixedfraction':
+        return AnswerType.mixedFraction;
+      case 'exponential':
       case 'exponent':
-        return _isValidExponent(value);
-
+        return AnswerType.exponential;
+      case 'squareroot':
+      case 'root':
+        return AnswerType.squareRoot;
       default:
-        return false;
+        return '';
     }
   }
 
-  bool _isValidFraction(String value) {
-    final match = RegExp(
-      r'^([+-]?\d+)\s*/\s*(\d+)$',
-    ).firstMatch(value);
+  /// Uses the shared AnswerTypeService so contest and other question flows
+  /// follow the same accepted answer formats.
+  bool isValidFormat(String answer, String answerType) {
+    final normalizedType = _normalizeAnswerType(answerType);
+    if (normalizedType.isEmpty) return false;
 
-    if (match == null) return false;
-
-    final denominator = int.tryParse(match.group(2)!);
-
-    return denominator != null && denominator != 0;
-  }
-
-  bool _isValidMixedFraction(String value) {
-    final match = RegExp(
-      r'^(\d+)\s+(\d+)\s*/\s*(\d+)$',
-    ).firstMatch(value);
-
-    if (match == null) return false;
-
-    final whole = int.tryParse(match.group(1)!);
-    final numerator = int.tryParse(match.group(2)!);
-    final denominator = int.tryParse(match.group(3)!);
-
-    return whole != null &&
-        numerator != null &&
-        denominator != null &&
-        denominator != 0 &&
-        numerator < denominator;
-  }
-
-  bool _isValidRatio(String value) {
-    final match = RegExp(
-      r'^(\d+)\s*:\s*(\d+)$',
-    ).firstMatch(value);
-
-    if (match == null) return false;
-
-    final first = int.tryParse(match.group(1)!);
-    final second = int.tryParse(match.group(2)!);
-
-    return first != null &&
-        second != null &&
-        (first != 0 || second != 0);
-  }
-
-  bool _isValidExponent(String value) {
-    return RegExp(
-      r'^[+-]?(?:\d+(?:\.\d+)?|\.\d+)\s*\^\s*[+-]?\d+$',
-    ).hasMatch(value);
+    return AnswerTypeService.validate(
+      answer: answer,
+      expectedType: normalizedType,
+    );
   }
 
   // =========================================================
@@ -631,34 +592,33 @@ class ContestSubmitService {
     String correct,
     String answerType,
   ) {
-    final type = answerType
-        .replaceAll('_', ' ')
-        .replaceAll(' ', '')
-        .toLowerCase();
+    final type = _normalizeAnswerType(answerType);
 
     switch (type) {
-      case 'integer':
-      case 'decimal':
+      case AnswerType.integer:
+      case AnswerType.decimal:
         return _compareNumbers(submitted, correct);
 
-      case 'percentage':
+      case AnswerType.percentage:
         return _compareNumbers(
           submitted.replaceAll('%', ''),
           correct.replaceAll('%', ''),
         );
 
-      case 'fraction':
+      case AnswerType.fraction:
         return _compareFractions(submitted, correct);
 
-      case 'mixedfraction':
-      case 'mixednumber':
+      case AnswerType.mixedFraction:
         return _compareMixedFractions(submitted, correct);
 
-      case 'ratio':
+      case AnswerType.ratio:
         return _compareRatios(submitted, correct);
 
-      case 'exponent':
+      case AnswerType.exponential:
         return _compareExponents(submitted, correct);
+
+      case AnswerType.squareRoot:
+        return _compareSquareRoots(submitted, correct);
 
       default:
         return false;
@@ -799,6 +759,29 @@ class ContestSubmitService {
     }
 
     return exponent < 0 ? 1 / result : result;
+  }
+
+  double? _squareRootValue(String value) {
+    final match = RegExp(
+      r'^(?:(\d+(?:\.\d+)?)\s*)?√\s*(\d+(?:\.\d+)?)$',
+    ).firstMatch(value.trim());
+    if (match == null) return null;
+
+    final coefficient = double.tryParse(match.group(1) ?? '1');
+    final radicand = double.tryParse(match.group(2)!);
+    if (coefficient == null || radicand == null || radicand < 0) {
+      return null;
+    }
+
+    final result = coefficient * math.sqrt(radicand);
+    return result.isFinite ? result : null;
+  }
+
+  bool _compareSquareRoots(String a, String b) {
+    final first = _squareRootValue(a);
+    final second = _squareRootValue(b);
+    if (first == null || second == null) return false;
+    return (first - second).abs() < 0.0000001;
   }
 
   bool _compareExponents(String a, String b) {

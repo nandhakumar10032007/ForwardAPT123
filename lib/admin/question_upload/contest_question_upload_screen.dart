@@ -6,6 +6,9 @@ import 'package:excel/excel.dart' hide Border;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../Topics.dart';
+import '../../services/answer_type_service.dart';
+
 class ContestQuestionUploadScreen extends StatefulWidget {
   const ContestQuestionUploadScreen({super.key});
 
@@ -17,9 +20,6 @@ class ContestQuestionUploadScreen extends StatefulWidget {
 class _ContestQuestionUploadScreenState
     extends State<ContestQuestionUploadScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
-
-  final TextEditingController _topicsController =
-      TextEditingController();
 
   Uint8List? _excelBytes;
   String? _fileName;
@@ -54,34 +54,21 @@ class _ContestQuestionUploadScreenState
       _validationErrors.isEmpty &&
       _topics.isNotEmpty;
 
-  @override
-  void dispose() {
-    _topicsController.dispose();
-    super.dispose();
-  }
-
   // ============================================================
-  // TOPICS
+  // TOPIC SELECTION
   // ============================================================
 
-  void _readTopics() {
-    final values = _topicsController.text
-        .split(',')
-        .map((value) => value.trim())
-        .where((value) => value.isNotEmpty)
-        .toList();
-
-    final uniqueTopics = <String>[];
-    final seen = <String>{};
-
-    for (final topic in values) {
-      if (seen.add(topic.toLowerCase())) {
-        uniqueTopics.add(topic);
-      }
-    }
+  void _toggleTopic(String topic, bool selected) {
+    if (_isUploading) return;
 
     setState(() {
-      _topics = uniqueTopics;
+      if (selected) {
+        if (!_topics.contains(topic)) _topics.add(topic);
+      } else {
+        _topics.remove(topic);
+      }
+      _questions.clear();
+      _validationErrors.clear();
     });
 
     if (_excelBytes != null) {
@@ -146,7 +133,7 @@ class _ContestQuestionUploadScreenState
     try {
       if (_topics.isEmpty) {
         _validationErrors.add(
-          'Enter the contest topics before validating the Excel file.',
+          'Select the contest topics before validating the Excel file.',
         );
         return;
       }
@@ -171,12 +158,13 @@ class _ContestQuestionUploadScreenState
         return _normalizeHeader(_cellText(cell));
       }).toList();
 
+      // answerType is intentionally optional for older Excel templates.
+      // The app now detects it automatically from correctAnswer.
       const requiredHeaders = [
         'title',
         'question',
         'topic',
         'difficulty',
-        'answertype',
         'correctanswer',
       ];
 
@@ -233,14 +221,17 @@ class _ContestQuestionUploadScreenState
 
         final title = valueOf('title');
         final question = valueOf('question');
-        final topic = valueOf('topic');
+        final topicFromExcel = valueOf('topic');
+        final topic = _topics.firstWhere(
+          (selectedTopic) =>
+              selectedTopic.toLowerCase() == topicFromExcel.toLowerCase(),
+          orElse: () => topicFromExcel,
+        );
         final difficulty = _canonicalDifficulty(
           valueOf('difficulty'),
         );
-        final answerType = _canonicalAnswerType(
-          valueOf('answertype'),
-        );
         final correctAnswer = valueOf('correctanswer');
+        final answerType = AnswerTypeService.detect(correctAnswer);
 
         final excelRow = rowIndex + 1;
 
@@ -249,7 +240,7 @@ class _ContestQuestionUploadScreenState
             topic.isEmpty ||
             correctAnswer.isEmpty) {
           _validationErrors.add(
-            'Excel row $excelRow: All six columns must have values.',
+            'Excel row $excelRow: Title, question, topic, difficulty, and correctAnswer are required.',
           );
           continue;
         }
@@ -257,7 +248,7 @@ class _ContestQuestionUploadScreenState
         if (!allowedTopics.contains(topic.toLowerCase())) {
           _validationErrors.add(
             'Excel row $excelRow: Topic "$topic" is not in the '
-            'admin topic list.',
+            'selected contest topics.',
           );
           continue;
         }
@@ -269,15 +260,22 @@ class _ContestQuestionUploadScreenState
           continue;
         }
 
-        if (![
-          'Integer',
-          'Decimal',
-          'Fraction',
-          'Percentage',
-          'Ratio',
-        ].contains(answerType)) {
+        if (answerType == null) {
           _validationErrors.add(
-            'Excel row $excelRow: Invalid answer type "$answerType".',
+            'Excel row $excelRow: Could not detect the answer type from '
+            '"$correctAnswer". Use a supported format such as 25, 12.5, '
+            '3/4, 25%, 2:3, 2^3, or √5.',
+          );
+          continue;
+        }
+
+        final answerError = AnswerTypeService.validationError(
+          answer: correctAnswer,
+          expectedType: answerType,
+        );
+        if (answerError != null) {
+          _validationErrors.add(
+            'Excel row $excelRow: $answerError',
           );
           continue;
         }
@@ -387,22 +385,6 @@ class _ContestQuestionUploadScreenState
     }
   }
 
-  String _canonicalAnswerType(String value) {
-    switch (value.trim().toLowerCase()) {
-      case 'integer':
-        return 'Integer';
-      case 'decimal':
-        return 'Decimal';
-      case 'fraction':
-        return 'Fraction';
-      case 'percentage':
-        return 'Percentage';
-      case 'ratio':
-        return 'Ratio';
-      default:
-        return value.trim();
-    }
-  }
 
   // ============================================================
   // CONTEST SCHEDULING - INDIA TIME
@@ -774,7 +756,6 @@ questionMaps.add(questionData);
         _fileName = null;
         _questions.clear();
         _topics.clear();
-        _topicsController.clear();
         _validationErrors.clear();
       });
 
@@ -999,7 +980,7 @@ questionMaps.add(questionData);
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Contest Topics',
+              'Select Contest Topics',
               style: TextStyle(
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
@@ -1007,34 +988,40 @@ questionMaps.add(questionData);
             ),
             const SizedBox(height: 8),
             const Text(
-              'Enter topics separated by commas.',
+              'Choose one or more topics from the master topic list. '
+              'Each Excel question must use one of the selected topics.',
             ),
             const SizedBox(height: 12),
-            TextField(
-              controller: _topicsController,
-              enabled: !_isUploading,
-              maxLines: 3,
-              decoration: const InputDecoration(
-                hintText:
-                    'Example: C Programming, Data Types, Operators',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.category_outlined),
-              ),
-              onChanged: (_) {
-                _readTopics();
-              },
+            Wrap(
+              spacing: 8,
+              runSpacing: 6,
+              children: Topics.all.map((topic) {
+                final selected = _topics.contains(topic);
+                return FilterChip(
+                  label: Text(topic),
+                  selected: selected,
+                  onSelected: _isUploading
+                      ? null
+                      : (value) => _toggleTopic(topic, value),
+                );
+              }).toList(),
             ),
-            if (_topics.isNotEmpty) ...[
-              const SizedBox(height: 12),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: _topics.map((topic) {
-                  return Chip(
-                    label: Text(topic),
-                    visualDensity: VisualDensity.compact,
-                  );
-                }).toList(),
+            const SizedBox(height: 10),
+            Text(
+              '${_topics.length} topic${_topics.length == 1 ? '' : 's'} selected',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (_topics.isEmpty) ...[
+              const SizedBox(height: 6),
+              Text(
+                'Select at least one topic before validating the Excel file.',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontSize: 12,
+                ),
               ),
             ],
           ],
@@ -1064,7 +1051,8 @@ questionMaps.add(questionData);
             const SizedBox(height: 8),
             const Text(
               'Required columns: title, question, topic, difficulty, '
-              'answerType, correctAnswer',
+              'correctAnswer. The answerType is detected automatically. '
+              'An old answerType column may remain in your Excel file; it is ignored.',
             ),
             const SizedBox(height: 14),
             if (_fileName != null) ...[

@@ -15,7 +15,8 @@ dependencies:
 
   # Cupertino Icons
   cupertino_icons: ^1.0.8
-
+  # PDF Question Upload
+  read_pdf_text: ^0.3.1
   # Firebase
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.0

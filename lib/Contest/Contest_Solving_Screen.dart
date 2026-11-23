@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../services/contest_submit_service.dart';
+import '../answer_type.dart';
 
 /// Contest solving screen with Firebase-backed submission and live penalty display.
 class ContestSolvingScreen extends StatefulWidget {
@@ -188,20 +189,42 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     }
   }
 
-  void _sortAndSetQuestions(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+  void _sortAndSetQuestions(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> docs,
+  ) {
+    // Keep the currently selected question before sorting the latest snapshot.
     final oldId = _currentQuestionId;
     final sorted = [...docs];
+
     sorted.sort((a, b) {
       final compare = _difficultyOrder(_difficulty(a.id, a.data()))
           .compareTo(_difficultyOrder(_difficulty(b.id, b.data())));
       return compare != 0 ? compare : a.id.compareTo(b.id);
     });
+
     _questions = sorted;
+
+    // Select the initial question only once.
     if (!_loadedInitialSelection) {
       _selectInitialQuestion();
-    } else if (_questions.isNotEmpty) {
-      final found = oldId == null ? -1 : _questions.indexWhere((q) => q.id == oldId);
-      _currentIndex = found >= 0 ? found : 0;
+      return;
+    }
+
+    if (_questions.isEmpty) return;
+
+    final found = oldId == null
+        ? -1
+        : _questions.indexWhere((question) => question.id == oldId);
+    final nextIndex = found >= 0 ? found : 0;
+    final newId = _questions[nextIndex].id;
+
+    _currentIndex = nextIndex;
+
+    // IMPORTANT:
+    // StreamBuilder can rebuild after every setState(). Restore the answer
+    // only if the selected question has actually changed. Otherwise this
+    // would clear validation feedback such as "Please enter your answer."
+    if (newId != oldId) {
       _restoreAnswer();
     }
   }
@@ -280,15 +303,50 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   }
 
 
+
+  /// Normalizes the answer-type value stored in Firestore so the validator
+  /// receives the exact values it supports.
+  String _normalizedAnswerType(String rawType) {
+    final compact = rawType
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[\s_-]+'), '');
+
+    switch (compact) {
+      case 'integer':
+        return 'integer';
+      case 'decimal':
+        return 'decimal';
+      case 'percentage':
+      case 'percent':
+        return 'percentage';
+      case 'fraction':
+        return 'fraction';
+      case 'mixedfraction':
+      case 'mixednumber':
+        return 'Mixed Fraction';
+      case 'radio':
+      case 'ratio':
+        return 'ratio';
+      case 'exponent':
+      case 'exponential':
+        return 'Exponential';
+      case 'squareroot':
+      case 'root':
+        return 'Square Root';
+      default:
+        return rawType.trim().toLowerCase();
+    }
+  }
+
   // Submit the currently selected question's answer.
-  // Uses the same correct/wrong dialogs as QuestionDetailedViewScreen.
+  // Invalid formats are rejected locally before any Firestore submission.
   Future<void> _submitAnswer() async {
     final questionId = _currentQuestionId;
     if (questionId == null || _isSubmitting) return;
 
     // In a live contest, a solved question cannot be submitted again.
-    // In practice mode, allow repeat attempts without changing the original
-    // solved state stored in Firestore.
+    // In practice mode, allow repeat attempts without changing original data.
     if (!widget.isPracticeMode && _solvedQuestionIds.contains(questionId)) {
       setState(() {
         _answerController.clear();
@@ -300,11 +358,25 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     }
 
     final answer = _answerController.text.trim();
+
     if (answer.isEmpty) {
       setState(() {
         _isAnswerInvalid = true;
-        _answerLabel =
-            'Invalid answer. Please enter the answer in the correct format.';
+        _answerLabel = 'Empty answer not considered. Please enter your answer.';
+      });
+      return;
+    }
+
+    // Validate the answer format BEFORE calling the Firestore submission
+    // service. Invalid answers therefore do not create attempts or penalties.
+    final rawAnswerType = (_currentData['answerType'] ?? '').toString();
+    final answerType = _normalizedAnswerType(rawAnswerType);
+
+    if (!_submitService.isValidFormat(answer, answerType)) {
+      setState(() {
+        _isAnswerInvalid = true;
+        _answerLabel = 'Please Check the answer type and enter the correct format.';
+        _answers[questionId] = answer;
       });
       return;
     }
@@ -318,8 +390,8 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
       _answerLabel = 'Checking your answer...';
     });
 
-    // Practice mode never calls submitAnswer(), because that service writes
-    // progress, penalties, summaries, and scores to Firestore.
+    // Practice mode checks the answer locally. It uses the same Submit button,
+    // but never calls the Firestore-writing submission service.
     if (widget.isPracticeMode) {
       _checkPracticeAnswer(questionId, answer);
       return;
@@ -372,8 +444,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         case ContestSubmissionStatus.invalidFormat:
           setState(() {
             _isAnswerInvalid = true;
-            _answerLabel =
-                'Invalid answer. Please enter the answer in the correct format.';
+            _answerLabel = 'Please enter the correct format.';
             _answers[questionId] = answer;
           });
           break;
@@ -385,7 +456,8 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         case ContestSubmissionStatus.questionNotFound:
         case ContestSubmissionStatus.error:
           setState(() {
-            _answerLabel = result.message;
+            _isAnswerInvalid = false;
+            _answerLabel = 'Enter your answer';
           });
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -399,6 +471,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        _isAnswerInvalid = false;
         _answerLabel = 'Enter your answer';
       });
       ScaffoldMessenger.of(context).showSnackBar(
@@ -424,7 +497,9 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
   /// so this is suitable for practice UX, not cheat-proof assessment.
   void _checkPracticeAnswer(String questionId, String answer) {
     final data = _currentData;
-    final answerType = (data['answerType'] ?? '').toString().trim();
+    final answerType = _normalizedAnswerType(
+      (data['answerType'] ?? '').toString(),
+    );
     final correctAnswer = (data['correctAnswer'] ?? '').toString().trim();
 
     try {
@@ -440,8 +515,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
       if (!_submitService.isValidFormat(answer, answerType)) {
         setState(() {
           _isAnswerInvalid = true;
-          _answerLabel =
-              'Invalid answer. Please enter the answer in the correct format.';
+          _answerLabel = 'Please enter the correct format.';
           _isSubmitting = false;
           _answers[questionId] = answer;
         });
