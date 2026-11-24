@@ -330,22 +330,12 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: const Color(0xFF4F46E5),
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: const Center(
-              child: Text(
-                'F',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 25,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
+          SizedBox(
+           width: 38,
+           height: 38,
+            child: Image.asset(
+             'assets/app_icon.png',
+              fit: BoxFit.cover,
             ),
           ),
 

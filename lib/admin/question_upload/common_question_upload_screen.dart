@@ -65,7 +65,7 @@ class _CommonQuestionUploadScreenState
     try {
       final result = await FilePicker.pickFiles(
         type: FileType.custom,
-        allowedExtensions: const ['xlsx','pdf'],
+        allowedExtensions: const ['xlsx'],
         withData: true,
         allowMultiple: false,
       );

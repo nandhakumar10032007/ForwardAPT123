@@ -265,6 +265,55 @@ class _DailyQuestionCalendarScreenState
     return result;
   }
 
+  void _showColorLegend() {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.palette_outlined, color: primary),
+              SizedBox(width: 10),
+              Text(
+                'Calendar Colors',
+                style: TextStyle(
+                  color: darkText,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          content: Wrap(
+            spacing: 18,
+            runSpacing: 16,
+            children: [
+              _legendItem(goldenBackground, goldenText, 'Active streak'),
+              _legendItem(greenBackground, greenText, 'Broken streak'),
+              _legendItem(blueBackground, blueText, 'Past solved'),
+              _legendItem(availableBackground, primary, 'Available'),
+              _legendItem(
+                unavailableBackground,
+                muted,
+                'Unavailable',
+                icon: Icons.lock_rounded,
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   // ============================================================
   // BUILD
   // ============================================================
@@ -278,29 +327,100 @@ class _DailyQuestionCalendarScreenState
         backgroundColor: Colors.white,
         elevation: 0,
         surfaceTintColor: Colors.white,
-
-        leading: IconButton(
-          icon: const Icon(
-            Icons.arrow_back_rounded,
-            color: darkText,
-          ),
-          onPressed: () => Navigator.pop(context),
+        automaticallyImplyLeading: false,
+        toolbarHeight: 68,
+        titleSpacing: 16,
+        title: Row(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(9),
+              child: Image.asset(
+                'assets/app_icon.png',
+                width: 42,
+                height: 42,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(width: 11),
+            const Expanded(
+              child: Text(
+                'ForwardAPT Daily Questions',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: darkText,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 17,
+                ),
+              ),
+            ),
+          ],
         ),
-
-        title: const Text(
-          'Daily Question Calendar',
-          style: TextStyle(
-            color: darkText,
-            fontWeight: FontWeight.bold,
-            fontSize: 19,
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: IconButton.filledTonal(
+              tooltip: "Today's question",
+              onPressed: () => Navigator.pop(context, _dateOnly(today)),
+              style: IconButton.styleFrom(
+                backgroundColor: const Color(0xFFEDEBFF),
+                foregroundColor: primary,
+              ),
+              icon: const Icon(Icons.exit_to_app_rounded),
+            ),
           ),
-        ),
-
+        ],
         bottom: const PreferredSize(
           preferredSize: Size.fromHeight(1),
-          child: Divider(
-            height: 1,
-            color: Color(0xFFE7E8EE),
+          child: Divider(height: 1, color: Color(0xFFE7E8EE)),
+        ),
+      ),
+
+      bottomNavigationBar: SafeArea(
+        top: false,
+        child: Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            border: Border(
+              top: BorderSide(color: Color(0xFFE7E8EE), width: 1),
+            ),
+          ),
+          child: NavigationBar(
+            height: 68,
+            backgroundColor: Colors.white,
+            elevation: 0,
+            selectedIndex: 3,
+            indicatorColor: const Color(0xFFEDEBFF),
+            labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+            onDestinationSelected: (index) {
+              // The calendar is opened from the Daily tab. Keep Daily here;
+              // other destinations return to the existing Dashboard route.
+              if (index != 3) {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              }
+            },
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.home_outlined, color: muted),
+                selectedIcon: Icon(Icons.home_rounded, color: primary),
+                label: 'Home',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.emoji_events_outlined, color: muted),
+                selectedIcon: Icon(Icons.emoji_events_rounded, color: primary),
+                label: 'Contest',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.edit_note_outlined, color: muted),
+                selectedIcon: Icon(Icons.edit_note_rounded, color: primary),
+                label: 'Custom Test',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.today_outlined, color: muted),
+                selectedIcon: Icon(Icons.today_rounded, color: primary),
+                label: 'Daily',
+              ),
+            ],
           ),
         ),
       ),
@@ -409,341 +529,238 @@ class _DailyQuestionCalendarScreenState
     required Map<String, String> solvedStatuses,
     int currentStreak = 0,
   }) {
-    final firstDay = DateTime(
-      currentMonth.year,
-      currentMonth.month,
-      1,
-    );
-
-    final totalDays = DateTime(
-      currentMonth.year,
-      currentMonth.month + 1,
-      0,
-    ).day;
-
-    // Monday-first calendar.
+    final firstDay = DateTime(currentMonth.year, currentMonth.month, 1);
+    final totalDays = DateTime(currentMonth.year, currentMonth.month + 1, 0).day;
     final startingOffset = firstDay.weekday - 1;
+    final totalCells = ((startingOffset + totalDays + 6) ~/ 7) * 7;
 
-    final totalCells =
-        ((startingOffset + totalDays + 6) ~/ 7) * 7;
-
-    final solvedCount = solvedStatuses.length;
-
-    final activeCount = solvedStatuses.values
+    final monthPrefix =
+        '${currentMonth.year.toString().padLeft(4, '0')}-'
+        '${currentMonth.month.toString().padLeft(2, '0')}-';
+    final monthStatuses = Map<String, String>.fromEntries(
+      solvedStatuses.entries.where((entry) => entry.key.startsWith(monthPrefix)),
+    );
+    final solvedCount = monthStatuses.length;
+    final activeCount = monthStatuses.values
         .where((status) => status == 'current_streak')
         .length;
-
-    final retrospectiveCount = solvedStatuses.values
+    final retrospectiveCount = monthStatuses.values
         .where((status) => status == 'previous_question_solved')
         .length;
 
-    return SingleChildScrollView(
-      physics: const BouncingScrollPhysics(),
-
-      padding: const EdgeInsets.all(16),
-
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-
-        children: [
-          // ================================================
-          // MONTH HEADER
-          // ================================================
-
-          _monthHeader(),
-
-          const SizedBox(height: 20),
-
-          // ================================================
-          // STREAK SUMMARY
-          // ================================================
-
-          _streakSummary(
-            currentStreak,
-            activeCount,
-          ),
-
-          const SizedBox(height: 20),
-
-          // ================================================
-          // COLOR LEGEND
-          // ================================================
-
-          _legend(),
-
-          const SizedBox(height: 20),
-
-          // ================================================
-          // CALENDAR GRID
-          // ================================================
-
-          Container(
-            padding: const EdgeInsets.all(12),
-
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: const Color(0xFFE5E6EB),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.025),
-                  blurRadius: 12,
-                  offset: const Offset(0, 4),
-                ),
-              ],
-            ),
-
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 18),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight - 34),
             child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                // WEEK DAYS
-                Row(
-                  children: [
-                    for (final day in [
-                      'MON',
-                      'TUE',
-                      'WED',
-                      'THU',
-                      'FRI',
-                      'SAT',
-                      'SUN',
-                    ])
-                      Expanded(
-                        child: Center(
-                          child: Text(
-                            day,
-                            style: const TextStyle(
-                              color: muted,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w800,
-                            ),
-                          ),
+                // Month and year on one row, with the color-help icon.
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 10,
+                    horizontal: 14,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: const Color(0xFFE5E6EB)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Spacer(),
+                      Text(
+                        '${months[currentMonth.month - 1]} ${currentMonth.year}',
+                        style: const TextStyle(
+                          color: darkText,
+                          fontSize: 21,
+                          fontWeight: FontWeight.w800,
                         ),
                       ),
+                      const Spacer(),
+                      IconButton(
+                        tooltip: 'Explain calendar colors',
+                        onPressed: _showColorLegend,
+                        icon: const Icon(
+                          Icons.info_outline_rounded,
+                          color: primary,
+                          size: 25,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 15),
+
+                // Solved progress.
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.check_circle_rounded,
+                        color: Color(0xFF15803D), size: 18),
+                    const SizedBox(width: 7),
+                    Text(
+                      'Solved ($solvedCount/${availableDates.length})',
+                      style: const TextStyle(
+                        color: darkText,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
                   ],
                 ),
 
-                const SizedBox(height: 14),
+                const SizedBox(height: 16),
 
-                // DATE GRID
-                GridView.builder(
-                  shrinkWrap: true,
-
-                  physics:
-                      const NeverScrollableScrollPhysics(),
-
-                  itemCount: totalCells,
-
-                  gridDelegate:
-                      const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 7,
-                    mainAxisSpacing: 8,
-                    crossAxisSpacing: 5,
-                    childAspectRatio: 0.85,
+                // Calendar grid.
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFE5E6EB)),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.025),
+                        blurRadius: 12,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
                   ),
-
-                  itemBuilder: (context, index) {
-                    final day =
-                        index - startingOffset + 1;
-
-                    if (day < 1 || day > totalDays) {
-                      return const SizedBox.shrink();
-                    }
-
-                    final date = DateTime(
-                      currentMonth.year,
-                      currentMonth.month,
-                      day,
-                    );
-
-                    final id = _dateId(date);
-
-                    final isAvailable =
-                        availableDates.contains(id);
-
-                    final isFuture = _isAfter(date, today);
-
-                    final isBeforeStart =
-                        !_isAtOrAfterMinimum(date);
-
-                    final solvedStatus = solvedStatuses[id];
-                    final isSolved = solvedStatus != null;
-                    final isActiveStreak =
-                        solvedStatus == 'current_streak';
-                    final isBrokenStreak =
-                        solvedStatus == 'broken_streak';
-                    final isRetrospective =
-                        solvedStatus == 'previous_question_solved';
-
-                    final isToday =
-                        _isSameDate(date, today);
-
-                    final isLocked =
-                        !isAvailable ||
-                            isFuture ||
-                            isBeforeStart;
-
-                    return _dayCell(
-                      day: day,
-                      isAvailable: isAvailable,
-                      isLocked: isLocked,
-                      isSolved: isSolved,
-                      isActiveStreak: isActiveStreak,
-                      isBrokenStreak: isBrokenStreak,
-                      isRetrospective: isRetrospective,
-                      isToday: isToday,
-                      onTap: isLocked
-                          ? null
-                          : () => _selectDate(
-                                date,
-                                availableDates,
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          for (final day in const [
+                            'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'
+                          ])
+                            Expanded(
+                              child: Center(
+                                child: Text(
+                                  day,
+                                  style: const TextStyle(
+                                    color: muted,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
                               ),
-                    );
-                  },
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 13),
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: totalCells,
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 7,
+                          mainAxisSpacing: 8,
+                          crossAxisSpacing: 5,
+                          childAspectRatio: 0.85,
+                        ),
+                        itemBuilder: (context, index) {
+                          final day = index - startingOffset + 1;
+                          if (day < 1 || day > totalDays) {
+                            return const SizedBox.shrink();
+                          }
+
+                          final date = DateTime(
+                            currentMonth.year, currentMonth.month, day);
+                          final id = _dateId(date);
+                          final isAvailable = availableDates.contains(id);
+                          final isFuture = _isAfter(date, today);
+                          final isBeforeStart = !_isAtOrAfterMinimum(date);
+                          final solvedStatus = solvedStatuses[id];
+                          final isSolved = solvedStatus != null;
+                          final isActiveStreak =
+                              solvedStatus == 'current_streak';
+                          final isBrokenStreak =
+                              solvedStatus == 'broken_streak';
+                          final isRetrospective =
+                              solvedStatus == 'previous_question_solved';
+                          final isToday = _isSameDate(date, today);
+                          final isLocked =
+                              !isAvailable || isFuture || isBeforeStart;
+
+                          return _dayCell(
+                            day: day,
+                            isAvailable: isAvailable,
+                            isLocked: isLocked,
+                            isSolved: isSolved,
+                            isActiveStreak: isActiveStreak,
+                            isBrokenStreak: isBrokenStreak,
+                            isRetrospective: isRetrospective,
+                            isToday: isToday,
+                            onTap: isLocked
+                                ? null
+                                : () => _selectDate(date, availableDates),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
                 ),
+
+                const SizedBox(height: 15),
+
+                // Previous and Next month controls below the calendar.
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed:
+                            canGoPrevious ? () => _changeMonth(-1) : null,
+                        icon: const Icon(Icons.chevron_left_rounded),
+                        label: const Text('Previous'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: primary,
+                          disabledForegroundColor: Colors.grey.shade400,
+                          side: const BorderSide(color: Color(0xFFDCDDF0)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: canGoNext ? () => _changeMonth(1) : null,
+                        icon: const Icon(Icons.chevron_right_rounded),
+                        label: const Text('Next'),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: primary,
+                          disabledForegroundColor: Colors.grey.shade400,
+                          side: const BorderSide(color: Color(0xFFDCDDF0)),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+
               ],
             ),
           ),
-
-          const SizedBox(height: 20),
-
-          // ================================================
-          // MONTH INFORMATION
-          // ================================================
-
-          Text(
-            '${availableDates.length} Daily Questions Available',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: primary,
-              fontSize: 14,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-
-          const SizedBox(height: 8),
-
-          Text(
-            '$solvedCount solved questions in this month',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: muted,
-              fontSize: 12,
-            ),
-          ),
-
-          const SizedBox(height: 5),
-
-          Text(
-            '$retrospectiveCount solved retrospectively',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: blueText,
-              fontSize: 12,
-            ),
-          ),
-
-          const SizedBox(height: 18),
-
-          const Text(
-            'Select an available date to solve its Daily Question. '
-            'Future dates and dates without uploaded questions '
-            'cannot be opened.',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              color: muted,
-              fontSize: 12,
-              height: 1.6,
-            ),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   // ============================================================
   // MONTH HEADER
   // ============================================================
-
-  Widget _monthHeader() {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 10,
-        vertical: 12,
-      ),
-
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: const Color(0xFFE5E6EB),
-        ),
-      ),
-
-      child: Row(
-        children: [
-          IconButton(
-            tooltip: canGoPrevious
-                ? 'Previous month'
-                : 'November 2026 is the first month',
-
-            onPressed:
-                canGoPrevious ? () => _changeMonth(-1) : null,
-
-            icon: Icon(
-              Icons.chevron_left_rounded,
-              size: 30,
-              color: canGoPrevious
-                  ? primary
-                  : Colors.grey.shade300,
-            ),
-          ),
-
-          Expanded(
-            child: Column(
-              children: [
-                Text(
-                  months[currentMonth.month - 1],
-                  style: const TextStyle(
-                    color: darkText,
-                    fontSize: 21,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-
-                Text(
-                  '${currentMonth.year}',
-                  style: const TextStyle(
-                    color: muted,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          IconButton(
-            tooltip: canGoNext
-                ? 'Next month'
-                : 'Future months are unavailable',
-
-            onPressed:
-                canGoNext ? () => _changeMonth(1) : null,
-
-            icon: Icon(
-              Icons.chevron_right_rounded,
-              size: 30,
-              color: canGoNext
-                  ? primary
-                  : Colors.grey.shade300,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   // ============================================================
   // STREAK SUMMARY

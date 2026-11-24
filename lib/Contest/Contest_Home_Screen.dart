@@ -381,9 +381,27 @@ Future<void> _register(String contestId) async {
         surfaceTintColor: Colors.white,
         elevation: 0,
         automaticallyImplyLeading: false,
-        title: const Text('Contest', style: TextStyle(
-          color: _text, fontSize: 21, fontWeight: FontWeight.w800,
-        )),
+        title: Row(
+  children: [
+   Image.asset(
+     'assets/app_icon.png',
+      width: 38,
+      height: 38,
+      fit: BoxFit.cover,
+    ),
+
+    const SizedBox(width: 10),
+
+    const Text(
+      'ForwardAPT Contest',
+      style: TextStyle(
+        color: _text,
+        fontSize: 21,
+        fontWeight: FontWeight.w800,
+      ),
+    ),
+  ],
+),
         actions: [
           IconButton(
             onPressed: () {},

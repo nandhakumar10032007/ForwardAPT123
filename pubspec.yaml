@@ -15,8 +15,10 @@ dependencies:
 
   # Cupertino Icons
   cupertino_icons: ^1.0.8
+
   # PDF Question Upload
   read_pdf_text: ^0.3.1
+
   # Firebase
   firebase_core: ^4.14.0
   firebase_auth: ^6.6.0
@@ -34,5 +36,23 @@ dev_dependencies:
   # Flutter Lints
   flutter_lints: ^6.0.0
 
+  # App Launcher Icons
+  flutter_launcher_icons: ^0.14.4
+
+# Launcher Icon Configuration
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/app_icon.png"
+
+  # Windows EXE Icon
+  windows:
+    generate: true
+    image_path: "assets/app_icon.png"
+    icon_size: 256
+
 flutter:
   uses-material-design: true
+
+  # App Assets
+  assets:
+    - assets/app_icon.png

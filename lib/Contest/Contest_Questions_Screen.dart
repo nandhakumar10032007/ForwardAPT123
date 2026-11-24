@@ -33,18 +33,43 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
   final TextEditingController _searchController = TextEditingController();
 
   late final Stream<QuerySnapshot<Map<String, dynamic>>> _questionsStream;
-  String? _progressCacheKey;
-  Future<Map<String, Map<String, dynamic>>>? _progressFuture;
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _progressStream;
+  late final Future<bool> _practiceRegistrationFuture;
 
   @override
   void initState() {
     super.initState();
 
-    _questionsStream = FirebaseFirestore.instance
+    final user = FirebaseAuth.instance.currentUser;
+
+    final contestDocument = FirebaseFirestore.instance
         .collection('Contest_Questions')
-        .doc(widget.contestId)
+        .doc(widget.contestId);
+
+    _questionsStream = contestDocument
         .collection('Questions')
         .snapshots();
+
+    if (user == null) {
+      _progressStream = const Stream.empty();
+      _practiceRegistrationFuture = Future<bool>.value(false);
+    } else {
+      final registeredDocument = contestDocument
+          .collection('Registered')
+          .doc(user.uid);
+
+      // Listen to every Result document so solved status and penalties
+      // refresh immediately when the solving screen updates Firestore.
+      _progressStream = registeredDocument
+          .collection('Result')
+          .snapshots();
+
+      // Preserve the existing practice-mode rule: only original contest
+      // participants can see their historical progress.
+      _practiceRegistrationFuture = registeredDocument
+          .get()
+          .then((snapshot) => snapshot.exists);
+    }
   }
 
   @override
@@ -82,53 +107,89 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
     }
   }
 
-  Future<Map<String, Map<String, dynamic>>> _getProgressFuture(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> questions,
+  Widget _buildProgressContent(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> documents,
   ) {
-    final key = questions.map((question) => question.id).join('|');
-    if (_progressFuture == null || _progressCacheKey != key) {
-      _progressCacheKey = key;
-      _progressFuture = _loadProgress(questions);
+    if (widget.isPracticeMode) {
+      return FutureBuilder<bool>(
+        future: _practiceRegistrationFuture,
+        builder: (context, registrationSnapshot) {
+          if (registrationSnapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(color: _primary),
+            );
+          }
+
+          if (registrationSnapshot.hasError) {
+            return _buildErrorState(
+              'Could not load your contest progress. Please try again.',
+            );
+          }
+
+          // A user who did not attend the original contest has no historical
+          // progress to display. Do not read a missing Result collection.
+          if (registrationSnapshot.data != true) {
+            return _buildQuestionsContent(documents, {});
+          }
+        
+          return _buildProgressStreamContent(documents);
+        },
+      );
     }
-    return _progressFuture!;
+
+    return _buildProgressStreamContent(documents);
   }
 
-  Future<Map<String, Map<String, dynamic>>> _loadProgress(
-    List<QueryDocumentSnapshot<Map<String, dynamic>>> questions,
-  ) async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return {};
+  Widget _buildProgressStreamContent(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> documents,
+  ) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _progressStream,
+      builder: (context, progressSnapshot) {
+        if (progressSnapshot.connectionState == ConnectionState.waiting) {
+          return const Center(
+            child: CircularProgressIndicator(color: _primary),
+          );
+        }
 
-    final registeredDocument = FirebaseFirestore.instance
-        .collection('Contest_Questions')
-        .doc(widget.contestId)
-        .collection('Registered')
-        .doc(user.uid);
+        if (progressSnapshot.hasError) {
+          return _buildErrorState(
+            'Could not load your contest progress. Please try again.',
+          );
+        }
 
-    // In practice mode, first check whether this user originally attended.
-    // A non-attendee must not try to read another user's or a missing
-    // registration's Result subcollection; their displayed progress is zero.
-    if (widget.isPracticeMode) {
-      final registrationSnapshot = await registeredDocument.get();
-      if (!registrationSnapshot.exists) {
-        return {};
-      }
-    }
+        final progress = <String, Map<String, dynamic>>{};
+        for (final resultDocument in progressSnapshot.data?.docs ?? []) {
+          progress[resultDocument.id] = resultDocument.data();
+        }
 
-    final resultCollection = registeredDocument.collection('Result');
-
-    final snapshots = await Future.wait(
-      questions.map((question) => resultCollection.doc(question.id).get()),
+        return _buildQuestionsContent(documents, progress);
+      },
     );
+  }
 
-    final progress = <String, Map<String, dynamic>>{};
-    for (var i = 0; i < questions.length; i++) {
-      final snapshot = snapshots[i];
-      if (snapshot.exists) {
-        progress[questions[i].id] = snapshot.data() ?? {};
-      }
-    }
-    return progress;
+  Widget _buildQuestionsContent(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> documents,
+    Map<String, Map<String, dynamic>> progress,
+  ) {
+    final allQuestions = _prepareQuestions(documents, progress);
+    final questions = _searchQuestions(allQuestions);
+
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(),
+      slivers: [
+        SliverToBoxAdapter(child: _buildHeader()),
+        SliverToBoxAdapter(child: _buildIntro(allQuestions)),
+        SliverToBoxAdapter(child: _buildSearchBar()),
+        SliverToBoxAdapter(
+          child: _buildQuestionsTitle(questions.length),
+        ),
+        _buildQuestionList(questions),
+        const SliverToBoxAdapter(
+          child: SizedBox(height: 28),
+        ),
+      ],
+    );
   }
 
   List<Map<String, dynamic>> _prepareQuestions(
@@ -217,45 +278,7 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
               return _buildErrorState('Please log in to view contest questions.');
             }
 
-            return FutureBuilder<Map<String, Map<String, dynamic>>>(
-              future: _getProgressFuture(documents),
-              builder: (context, progressSnapshot) {
-                if (progressSnapshot.connectionState ==
-                    ConnectionState.waiting) {
-                  return const Center(
-                    child: CircularProgressIndicator(color: _primary),
-                  );
-                }
-
-                if (progressSnapshot.hasError) {
-                  return _buildErrorState(
-                    'Could not load your contest progress. Please try again.',
-                  );
-                }
-
-                final allQuestions = _prepareQuestions(
-                  documents,
-                  progressSnapshot.data ?? {},
-                );
-                final questions = _searchQuestions(allQuestions);
-
-                return CustomScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  slivers: [
-                    SliverToBoxAdapter(child: _buildHeader()),
-                    SliverToBoxAdapter(child: _buildIntro(allQuestions)),
-                    SliverToBoxAdapter(child: _buildSearchBar()),
-                    SliverToBoxAdapter(
-                      child: _buildQuestionsTitle(questions.length),
-                    ),
-                    _buildQuestionList(questions),
-                    const SliverToBoxAdapter(
-                      child: SizedBox(height: 28),
-                    ),
-                  ],
-                );
-              },
-            );
+            return _buildProgressContent(documents);
           },
         ),
       ),
@@ -273,24 +296,12 @@ class _ContestQuestionsScreenState extends State<ContestQuestionsScreen> {
       ),
       child: Row(
         children: [
-          Container(
-            width: 43,
-            height: 43,
-            decoration: BoxDecoration(
-              color: _primary,
-              borderRadius: BorderRadius.circular(13),
-            ),
-            child: const Center(
-              child: Text(
-                'F',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 23,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-            ),
-          ),
+          Image.asset(
+            'assets/app_icon.png',
+             width: 38,
+             height: 38,
+             fit: BoxFit.cover,
+          ), 
           const SizedBox(width: 12),
           const Expanded(
             child: Text(

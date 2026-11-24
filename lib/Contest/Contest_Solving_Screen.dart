@@ -802,19 +802,30 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
         automaticallyImplyLeading: false,
         title: Row(
           children: [
-            const Text(
-              'Doing',
-              style: TextStyle(
-                color: _text,
-                fontSize: 19,
-                fontWeight: FontWeight.w800,
+            Image.asset(
+              'assets/app_icon.png',
+              width: 38,
+              height: 38,
+              fit: BoxFit.cover,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Question to Solution',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: _text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
             if (widget.isPracticeMode) ...[
-              const SizedBox(width: 9),
+              const SizedBox(width: 5),
               Container(
                 padding: const EdgeInsets.symmetric(
-                  horizontal: 8,
+                  horizontal: 6,
                   vertical: 4,
                 ),
                 decoration: BoxDecoration(
@@ -825,7 +836,7 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
                   'PRACTICE',
                   style: TextStyle(
                     color: _primary,
-                    fontSize: 9,
+                    fontSize: 8,
                     fontWeight: FontWeight.w900,
                     letterSpacing: .4,
                   ),
@@ -834,7 +845,22 @@ class _ContestSolvingScreenState extends State<ContestSolvingScreen> {
             ],
           ],
         ),
-        actions: [Padding(padding: const EdgeInsets.only(right: 18), child: Center(child: Text(_questions.isEmpty ? '' : '${_currentIndex + 1} / ${_questions.length}', style: const TextStyle(color: _muted, fontWeight: FontWeight.w700))))],
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Center(
+              child: Text(
+                _questions.isEmpty
+                    ? ''
+                    : '${_currentIndex + 1} / ${_questions.length}',
+                style: const TextStyle(
+                  color: _muted,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+        ],
         bottom: const PreferredSize(preferredSize: Size.fromHeight(1), child: Divider(height: 1, color: Color(0xFFE7E8EE))),
       ),
       body: SafeArea(

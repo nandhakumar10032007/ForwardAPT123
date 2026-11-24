@@ -419,8 +419,30 @@ class _DailyQuestionSolvingScreenState
                 icon: const Icon(Icons.arrow_back_rounded, color: _text),
                 onPressed: _openCalendar,
               ),
-        title: const Text('Question Details',
-            style: TextStyle(color: _text, fontSize: 19, fontWeight: FontWeight.w800)),
+       title: Row(
+  children: [
+    Image.asset(
+      'assets/app_icon.png',
+      width: 38,
+      height: 38,
+      fit: BoxFit.cover,
+    ),
+
+    const SizedBox(width: 10),
+
+    const Flexible(
+      child: Text(
+        'ForwardAPT Daily Question',
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: _text,
+          fontSize: 19,
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    ),
+  ],
+),
         actions: [
           StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
             stream: _user == null
