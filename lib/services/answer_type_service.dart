@@ -13,9 +13,9 @@ class AnswerTypeService {
     r'^[+-]?\d+(?:\.\d+)?%$',
   );
 
-  // Ratio: 2:3
+  // Ratio: 2:3, 2:3:4, 2:3:4:5 or more terms
   static final RegExp _ratioRegex = RegExp(
-    r'^[+-]?\d+(?:\.\d+)?\s*:\s*[+-]?\d+(?:\.\d+)?$',
+    r'^[+-]?\d+(?:\.\d+)?(?:\s*:\s*[+-]?\d+(?:\.\d+)?)+$',
   );
 
   // Decimal: 15.5 or 15.50
@@ -28,10 +28,10 @@ class AnswerTypeService {
     r'^[+-]?\d+\s*/\s*[+-]?\d+$',
   );
 
-  // Mixed fraction: 10 5/6
-  static final RegExp _mixedFractionRegex = RegExp(
-    r'^[+-]?\d+\s+\d+\s*/\s*[+-]?\d+$',
-  );
+ // Mixed fraction: 10-5/6
+static final RegExp _mixedFractionRegex = RegExp(
+  r'^[+-]?\d+-\s*\d+\s*/\s*[+-]?\d+$',
+);
 
   // Exponential: 2^3
   static final RegExp _exponentialRegex = RegExp(

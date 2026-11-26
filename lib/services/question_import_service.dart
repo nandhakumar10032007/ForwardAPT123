@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:excel/excel.dart';
+import 'package:flutter/foundation.dart';
 
 import '../Topics.dart';
 import 'answer_type_service.dart';
@@ -84,10 +85,11 @@ class QuestionImportService {
   final FirebaseFirestore _firestore;
 
   static const Map<String, String> _collections = {
-    'common': 'commonQuestions',
     'contest': 'contestQuestions',
     'test': 'testQuestions',
   };
+
+  static const String _commonCollection = 'Common_questions';
 
   /// Only four columns are required in Excel.
   static const Set<String> _requiredHeaders = {
@@ -119,7 +121,7 @@ class QuestionImportService {
 
     final collectionName = _collections[normalizedCategory];
 
-    if (collectionName == null) {
+    if (normalizedCategory != 'common' && collectionName == null) {
       throw ArgumentError(
         'Invalid category. Use common, contest, or test.',
       );
@@ -140,13 +142,23 @@ class QuestionImportService {
       );
     }
 
+    // Decode Excel workbook.
     final Excel workbook;
 
     try {
       workbook = Excel.decodeBytes(bytes);
-    } catch (_) {
-      throw const FormatException(
-        'Could not read this file. Please select a valid .xlsx file.',
+    } catch (e, stackTrace) {
+      debugPrint('====================================');
+      debugPrint('EXCEL DECODING ERROR');
+      debugPrint('====================================');
+      debugPrint('Error: $e');
+      debugPrint('File size: ${bytes.length} bytes');
+      debugPrint('====================================');
+
+      debugPrintStack(stackTrace: stackTrace);
+
+      throw FormatException(
+        'Excel decoding failed: $e',
       );
     }
 
@@ -200,10 +212,15 @@ class QuestionImportService {
       }
     }
 
-    // Load existing questions from the selected Firestore collection.
-    final existingSnapshot = await _firestore
-        .collection(collectionName)
-        .get();
+    // Common questions are stored inside the selected topic's subcollection.
+    // Contest and Test continue using their existing top-level collections.
+    final existingSnapshot = normalizedCategory == 'common'
+        ? await _firestore
+            .collection(_commonCollection)
+            .doc(canonicalTopic)
+            .collection('questions')
+            .get()
+        : await _firestore.collection(collectionName!).get();
 
     final existingQuestionKeys = <String>{};
 
@@ -282,7 +299,7 @@ class QuestionImportService {
             question: null,
             status: 'Duplicate',
             message: 'This question already exists in '
-                '$normalizedCategory questions.',
+                '${normalizedCategory == 'common' ? canonicalTopic : normalizedCategory} questions.',
           ),
         );
 

@@ -6,7 +6,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '/Topics.dart';
-import '../../models/question_model.dart';
 import '../../services/question_import_service.dart';
 
 class CommonQuestionUploadScreen extends StatefulWidget {
@@ -34,14 +33,76 @@ class _CommonQuestionUploadScreenState
 
   bool _isLoading = false;
   bool _isUploading = false;
+  bool _isInitializingTopics = true;
+  bool _topicsInitialized = false;
 
   static const String _category = 'common';
-  static const String _collectionName = 'commonQuestions';
+  static const String _collectionName = 'Common_questions';
+  static const String _counterDocumentId = 'Common';
+  static const int _maximumUploadCount = 498;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeTopicDocuments();
+  }
+
+  /// Creates missing topic documents without changing existing counts.
+  /// A failed initialization stays marked as incomplete so upload is blocked.
+  Future<void> _initializeTopicDocuments() async {
+    if (mounted) {
+      setState(() {
+        _isInitializingTopics = true;
+      });
+    }
+
+    try {
+      final topicRefs = Topics.all
+          .map((topic) => _firestore.collection(_collectionName).doc(topic))
+          .toList();
+
+      await _firestore.runTransaction<void>((transaction) async {
+        final snapshots = <DocumentSnapshot<Map<String, dynamic>>>[];
+
+        // Read every topic before writing any topic document.
+        for (final ref in topicRefs) {
+          snapshots.add(await transaction.get(ref));
+        }
+
+        // Create only missing topic documents. Existing counts are preserved.
+        for (var index = 0; index < topicRefs.length; index++) {
+          if (!snapshots[index].exists) {
+            transaction.set(topicRefs[index], {
+              'noOfQuestions': 0,
+              'createdAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            });
+          }
+        }
+      });
+
+      _topicsInitialized = true;
+    } catch (e) {
+      _topicsInitialized = false;
+      if (mounted) {
+        _showMessage(
+          'Could not initialize question topics. Check your Firestore rules and connection. Details: $e',
+          isError: true,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isInitializingTopics = false;
+        });
+      }
+    }
+  }
 
   int get _acceptedCount => _preview?.acceptedCount ?? 0;
 
   Future<void> _selectTopic(String? topic) async {
-    if (topic == null || _isLoading || _isUploading) return;
+    if (topic == null || _isLoading || _isUploading || _isInitializingTopics) return;
 
     setState(() {
       _selectedTopic = topic;
@@ -54,6 +115,11 @@ class _CommonQuestionUploadScreenState
   }
 
   Future<void> _selectExcelFile() async {
+    if (_isInitializingTopics) {
+      _showMessage('Please wait while topics are initialized.');
+      return;
+    }
+
     if (_selectedTopic == null) {
       _showMessage(
         'Please select a topic first.',
@@ -161,6 +227,14 @@ class _CommonQuestionUploadScreenState
   }
 
   Future<void> _confirmUpload() async {
+    if (_isInitializingTopics || !_topicsInitialized) {
+      _showMessage(
+        'Question topics are not ready yet. Please wait and try again.',
+        isError: true,
+      );
+      return;
+    }
+
     final preview = _preview;
 
     if (preview == null || preview.acceptedQuestions.isEmpty) {
@@ -171,9 +245,9 @@ class _CommonQuestionUploadScreenState
       return;
     }
 
-    if (preview.acceptedQuestions.length > 499) {
+    if (preview.acceptedQuestions.length > _maximumUploadCount) {
       _showMessage(
-        'Please upload no more than 499 questions at a time.',
+        'Please upload no more than 498 questions at a time.',
         isError: true,
       );
       return;
@@ -227,13 +301,19 @@ class _CommonQuestionUploadScreenState
 
     if (preview == null || topic == null) return;
 
+    // Retry initialization before upload if the page's first attempt failed.
+    if (!_topicsInitialized) {
+      await _initializeTopicDocuments();
+      if (!_topicsInitialized) return;
+    }
+
     final drafts = preview.acceptedQuestions;
 
     if (drafts.isEmpty) return;
 
-    if (drafts.length > 499) {
+    if (drafts.length > _maximumUploadCount) {
       _showMessage(
-        'Please upload no more than 499 questions at a time.',
+        'Please upload no more than 498 questions at a time.',
         isError: true,
       );
       return;
@@ -277,91 +357,100 @@ class _CommonQuestionUploadScreenState
         return;
       }
 
-      if (refreshedDrafts.length > 499) {
+      if (refreshedDrafts.length > _maximumUploadCount) {
         _showMessage(
-          'Please upload no more than 499 questions at a time.',
+          'Please upload no more than 498 questions at a time.',
           isError: true,
         );
         return;
       }
 
-      final counterRef =
-          _firestore.collection('questionCounters').doc('global');
-
-      final collectionRef =
-          _firestore.collection(_collectionName);
+      final counterRef = _firestore
+          .collection('questionCounters')
+          .doc(_counterDocumentId);
+      final topicRef = _firestore
+          .collection(_collectionName)
+          .doc(topic);
+      final questionsCollection = topicRef.collection('questions');
 
       await _firestore.runTransaction<void>((transaction) async {
+        // Read the global counter and selected topic count first.
         final counterSnapshot = await transaction.get(counterRef);
+        final topicSnapshot = await transaction.get(topicRef);
 
-        final counterData = counterSnapshot.data();
-        final storedValue = counterData?['lastQuestionNo'];
+        // If the topic document is missing, the transaction below recreates
+        // it with its first updated question count.
+        final counterData = counterSnapshot.data() ?? <String, dynamic>{};
+        final storedCounter = counterData['last question no'] ??
+            counterData['lastQuestionNo'] ??
+            '00';
+        final lastQuestionNo = storedCounter is num
+            ? storedCounter.toInt()
+            : int.tryParse(storedCounter.toString().trim()) ?? 0;
 
-        final lastQuestionNo =
-            storedValue is num ? storedValue.toInt() : 0;
+        final topicData = topicSnapshot.exists
+            ? (topicSnapshot.data() ?? <String, dynamic>{})
+            : <String, dynamic>{'noOfQuestions': 0};
+        final storedTopicCount = topicData['noOfQuestions'];
+        final topicQuestionCount = storedTopicCount is num
+            ? storedTopicCount.toInt()
+            : int.tryParse(storedTopicCount?.toString() ?? '') ?? 0;
 
-        final newLastQuestionNo =
-            lastQuestionNo + refreshedDrafts.length;
+        final questionRefs = <DocumentReference<Map<String, dynamic>>>[];
+        final questionDataToSave = <Map<String, dynamic>>[];
 
-        final questionRefs =
-            <DocumentReference<Map<String, dynamic>>>[];
-
-        final questionsToSave = <QuestionModel>[];
-
-        for (var index = 0;
-            index < refreshedDrafts.length;
-            index++) {
+        for (var index = 0; index < refreshedDrafts.length; index++) {
           final draft = refreshedDrafts[index];
-          final questionNo = lastQuestionNo + index + 1;
+          final globalQuestionNo = lastQuestionNo + index + 1;
+          final topicQuestionNo = topicQuestionCount + index + 1;
+          final questionRef = questionsCollection.doc('question_$topicQuestionNo');
 
-          final documentRef =
-              collectionRef.doc('question_$questionNo');
-
-          questionRefs.add(documentRef);
-
-          questionsToSave.add(
-            QuestionModel(
-              questionNo: questionNo,
-              title: draft.title,
-              question: draft.question,
-              topic: draft.topic,
-              difficulty: draft.difficulty,
-              answerType: draft.answerType,
-              correctAnswer: draft.correctAnswer,
-            ),
-          );
+          questionRefs.add(questionRef);
+          questionDataToSave.add({
+            'answerType': draft.answerType,
+            'correctAnswer': draft.correctAnswer,
+            'createdAt': FieldValue.serverTimestamp(),
+            'difficulty': draft.difficulty,
+            'question': draft.question,
+            'questionNo': globalQuestionNo,
+            'title': draft.title,
+            'topic': topic,
+          });
         }
 
-        // Check that generated document IDs do not already exist.
-        // All reads happen before transaction writes.
-        for (final documentRef in questionRefs) {
-          final existing = await transaction.get(documentRef);
-
+        // Verify all topic-wise document IDs before writing anything.
+        for (final questionRef in questionRefs) {
+          final existing = await transaction.get(questionRef);
           if (existing.exists) {
             throw StateError(
-              'A question document already exists at '
-              '${documentRef.path}. Please check the global counter.',
+              'A question already exists at ${questionRef.path}. '
+              'The topic noOfQuestions count may be incorrect. '
+              'No questions were uploaded.',
             );
           }
         }
 
-        // Reserve question numbers and save questions atomically.
+        // Commit question documents, topic count and global counter atomically.
         transaction.set(
           counterRef,
           {
-            'lastQuestionNo': newLastQuestionNo,
+            'last question no': lastQuestionNo + refreshedDrafts.length,
             'updatedAt': FieldValue.serverTimestamp(),
           },
           SetOptions(merge: true),
         );
 
-        for (var index = 0;
-            index < questionsToSave.length;
-            index++) {
-          transaction.set(
-            questionRefs[index],
-            questionsToSave[index].toMap(),
-          );
+        transaction.set(
+          topicRef,
+          {
+            'noOfQuestions': topicQuestionCount + refreshedDrafts.length,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+
+        for (var index = 0; index < questionRefs.length; index++) {
+          transaction.set(questionRefs[index], questionDataToSave[index]);
         }
       });
 
@@ -461,6 +550,26 @@ class _CommonQuestionUploadScreenState
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               _buildHeaderCard(),
+
+              if (_isInitializingTopics) ...[
+                const SizedBox(height: 12),
+                const Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(14),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(child: Text('Preparing question topics...')),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
 
               const SizedBox(height: 20),
 
@@ -614,7 +723,7 @@ class _CommonQuestionUploadScreenState
                   ),
                 );
               }).toList(),
-              onChanged: _isLoading || _isUploading
+              onChanged: _isLoading || _isUploading || _isInitializingTopics
                   ? null
                   : _selectTopic,
             ),
@@ -698,7 +807,7 @@ class _CommonQuestionUploadScreenState
 
             FilledButton.icon(
               onPressed:
-                  !topicSelected || _isLoading || _isUploading
+                  !topicSelected || _isLoading || _isUploading || _isInitializingTopics
                       ? null
                       : _selectExcelFile,
               icon: const Icon(Icons.folder_open),
