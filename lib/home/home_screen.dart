@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import '../screens/question_detailed_view_screen.dart';
+import '../Topics.dart';
+import 'widgets/home_filter_widget.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,7 +20,9 @@ class _HomeScreenState extends State<HomeScreen> {
       TextEditingController();
 
   String _selectedDifficulty = 'All';
-  String _selectedTopic = 'All';
+  String _selectedTopic = 'All Topics';
+  String _selectedStatus = 'Unsolved';
+  Timer? _searchDebounce;
 
   String _userName = 'Username';
   int _streak = 0;
@@ -145,97 +150,181 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   Future<void> _loadRandomUnsolvedQuestions() async {
+    _searchDebounce?.cancel();
     final user = FirebaseAuth.instance.currentUser;
 
     if (user == null) {
+      if (!mounted) return;
       setState(() {
         _isLoadingQuestions = false;
-        _questionLoadError =
-            'Please log in to view questions.';
+        _questionLoadError = 'Please log in to view questions.';
         _questions = [];
       });
-
       return;
     }
 
-    setState(() {
-      _isLoadingQuestions = true;
-      _questionLoadError = null;
-    });
+    if (mounted) {
+      setState(() {
+        _isLoadingQuestions = true;
+        _questionLoadError = null;
+      });
+    }
 
     try {
       final firestore = FirebaseFirestore.instance;
+      final userRef = firestore.collection('users').doc(user.uid);
 
-      // Fetch questions and this user's solved-question records.
-      final results = await Future.wait([
-        firestore.collection('commonQuestions').get(),
-        firestore
-            .collection('users')
-            .doc(user.uid)
-            .collection('solvedQuestions')
-            .get(),
-      ]);
+      // Read questions and this user's solved IDs topic-by-topic.
+      final futures = <Future<QuerySnapshot<Map<String, dynamic>>>>[];
+      for (final topic in Topics.all) {
+        futures.add(
+          firestore.collection('Common_questions')
+              .doc(topic).collection('questions').get(),
+        );
+        futures.add(
+          userRef.collection('solved')
+              .doc(topic).collection('questions').get(),
+        );
+      }
 
-      final questionSnapshot =
-          results[0] as QuerySnapshot<Map<String, dynamic>>;
+      final snapshots = await Future.wait(futures);
+      final unsolved = <Map<String, dynamic>>[];
+      final solved = <Map<String, dynamic>>[];
+      final search = _searchController.text.trim().toLowerCase();
 
-      final solvedSnapshot =
-          results[1] as QuerySnapshot<Map<String, dynamic>>;
+      for (var i = 0; i < Topics.all.length; i++) {
+        final topic = Topics.all[i];
+        final questionSnapshot = snapshots[i * 2];
+        final solvedSnapshot = snapshots[i * 2 + 1];
+        final solvedIds = solvedSnapshot.docs.map((d) => d.id).toSet();
 
-      // The solved record document ID should match the question
-      // document ID, for example: question_1.
-      final Set<String> solvedQuestionIds = solvedSnapshot.docs
-          .map((doc) => doc.id)
-          .toSet();
+        for (final doc in questionSnapshot.docs) {
+          final data = doc.data();
+          final questionTopic = (data['topic'] ?? topic).toString();
+          final difficulty = (data['difficulty'] ?? '').toString();
 
-      // Keep only questions that this user has not solved.
-      final unsolvedDocuments = questionSnapshot.docs.where((doc) {
-        return !solvedQuestionIds.contains(doc.id);
-      }).toList();
+          if (_selectedTopic != 'All Topics' &&
+              questionTopic != _selectedTopic) {
+            continue;
+          }
+          if (_selectedDifficulty != 'All' &&
+              difficulty.toLowerCase() != _selectedDifficulty.toLowerCase()) {
+            continue;
+          }
 
-      // Randomize the remaining questions.
-      unsolvedDocuments.shuffle(Random());
+          final number = (data['questionNo'] ?? '').toString();
+          final title = (data['title'] ?? 'Untitled Question').toString();
+          final description = (data['question'] ?? '').toString();
 
-      // Choose up to 10 random questions.
-      final selectedDocuments = unsolvedDocuments.take(10).toList();
+          // Search is performed against the complete fetched database set,
+          // not only the previous 25 displayed questions.
+          final matchesSearch = search.isEmpty ||
+              title.toLowerCase().contains(search) ||
+              description.toLowerCase().contains(search) ||
+              number.toLowerCase().contains(search);
+          if (!matchesSearch) continue;
 
-      final List<Map<String, dynamic>> loadedQuestions =
-          selectedDocuments.map((doc) {
-        final data = doc.data();
+          final isSolved = solvedIds.contains(doc.id);
+          final question = <String, dynamic>{
+            'documentId': doc.id,
+            'number': number,
+            'title': title,
+            'description': description,
+            'topic': questionTopic,
+            'difficulty': difficulty.isEmpty ? 'Easy' : difficulty,
+            'answerType': data['answerType'] ?? '',
+            'isSolved': isSolved,
+          };
 
-        return <String, dynamic>{
-          'documentId': doc.id,
-          'number': data['questionNo'] ?? '',
-          'title': data['title'] ?? 'Untitled Question',
-          'description': data['question'] ?? '',
-          'topic': data['topic'] ?? 'General',
-          'difficulty': data['difficulty'] ?? 'Easy',
-          'answerType': data['answerType'] ?? '',
-        };
-      }).toList();
+          if (isSolved) {
+            solved.add(question);
+          } else {
+            unsolved.add(question);
+          }
+        }
+      }
+
+      // Randomize within each group. For Both, unsolved always comes first.
+      unsolved.shuffle(Random());
+      solved.shuffle(Random());
+
+      List<Map<String, dynamic>> selectedQuestions;
+      switch (_selectedStatus) {
+        case 'Solved':
+          selectedQuestions = solved.take(25).toList();
+          break;
+        case 'Both':
+          selectedQuestions = [
+            ...unsolved.take(25),
+            ...solved.take(25),
+          ].take(25).toList();
+          break;
+        case 'Unsolved':
+        default:
+          selectedQuestions = unsolved.take(25).toList();
+      }
 
       if (!mounted) return;
-
       setState(() {
-        _questions = loadedQuestions;
+        _questions = selectedQuestions;
         _isLoadingQuestions = false;
         _questionLoadError = null;
       });
-    } catch (error) {
+    } catch (error, stackTrace) {
+      debugPrint('Error loading filtered questions: $error');
+      debugPrintStack(stackTrace: stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _isLoadingQuestions = false;
+        _questionLoadError = 'Could not load questions. Please try again.';
+      });
+    }
+  }
+
+  Future<void> _refreshVisibleSolvedStatuses() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || _questions.isEmpty) return;
+
+    try {
+      final userRef =
+          FirebaseFirestore.instance.collection('users').doc(user.uid);
+
+      final statusChecks = await Future.wait(
+        _questions.map((question) {
+          return userRef
+              .collection('solved')
+              .doc(question['topic'].toString())
+              .collection('questions')
+              .doc(question['documentId'].toString())
+              .get();
+        }),
+      );
+
       if (!mounted) return;
 
       setState(() {
-        _isLoadingQuestions = false;
-        _questionLoadError =
-            'Could not load questions. Please try again.';
+        for (var i = 0; i < _questions.length; i++) {
+          _questions[i]['isSolved'] = statusChecks[i].exists;
+        }
       });
-
-      debugPrint('Error loading questions: $error');
+    } catch (error, stackTrace) {
+      debugPrint('Error refreshing solved question statuses: $error');
+      debugPrintStack(stackTrace: stackTrace);
     }
+  }
+
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 450),
+      _loadRandomUnsolvedQuestions,
+    );
+    setState(() {});
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _searchController.dispose();
     super.dispose();
   }
@@ -244,48 +333,7 @@ class _HomeScreenState extends State<HomeScreen> {
   // FILTER QUESTIONS
   // ============================================================
 
-  List<Map<String, dynamic>> get _filteredQuestions {
-    final search = _searchController.text.trim().toLowerCase();
-
-    return _questions.where((question) {
-      final title =
-          (question['title'] ?? '').toString().toLowerCase();
-
-      final description =
-          (question['description'] ?? '').toString().toLowerCase();
-
-      final topic =
-          (question['topic'] ?? '').toString().toLowerCase();
-
-      final number = (question['number'] ?? '').toString();
-
-      final matchesSearch = search.isEmpty ||
-          title.contains(search) ||
-          description.contains(search) ||
-          topic.contains(search) ||
-          number.contains(search);
-
-      final matchesDifficulty =
-          _selectedDifficulty == 'All' ||
-              question['difficulty'] == _selectedDifficulty;
-
-      final matchesTopic =
-          _selectedTopic == 'All' ||
-              question['topic'] == _selectedTopic;
-
-      return matchesSearch && matchesDifficulty && matchesTopic;
-    }).toList();
-  }
-
-  List<String> get _availableTopics {
-    final topics = _questions
-        .map((question) => question['topic'].toString())
-        .toSet()
-        .toList()
-      ..sort();
-
-    return ['All', ...topics];
-  }
+  List<Map<String, dynamic>> get _filteredQuestions => _questions;
 
   // ============================================================
   // MAIN BUILD
@@ -465,7 +513,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               child: TextField(
                 controller: _searchController,
-                onChanged: (_) => setState(() {}),
+                onChanged: _onSearchChanged,
                 decoration: InputDecoration(
                   hintText: 'Search questions...',
                   hintStyle: const TextStyle(
@@ -481,7 +529,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       ? IconButton(
                           onPressed: () {
                             _searchController.clear();
-                            setState(() {});
+                            _loadRandomUnsolvedQuestions();
                           },
                           icon: const Icon(
                             Icons.close_rounded,
@@ -526,8 +574,8 @@ class _HomeScreenState extends State<HomeScreen> {
   // ============================================================
 
   Widget _buildQuestionsTitle() {
-    final hasFilter =
-        _selectedDifficulty != 'All' || _selectedTopic != 'All';
+    final hasFilter = _selectedDifficulty != 'All' ||
+        _selectedTopic != 'All Topics' || _selectedStatus != 'Unsolved';
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 28, 20, 14),
@@ -558,8 +606,10 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () {
                 setState(() {
                   _selectedDifficulty = 'All';
-                  _selectedTopic = 'All';
+                  _selectedTopic = 'All Topics';
+                  _selectedStatus = 'Unsolved';
                 });
+                _loadRandomUnsolvedQuestions();
               },
               child: const Text('Clear filters'),
             ),
@@ -683,8 +733,8 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     return GestureDetector(
-      onTap: () {
-        Navigator.push(
+      onTap: () async {
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => QuestionDetailedViewScreen(
@@ -701,6 +751,13 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         );
+
+        // Refresh only the solved labels when returning.
+        // Keep the current list visible even if the selected filter is
+        // "Unsolved". The next filter/search refresh applies the filter again.
+        if (mounted) {
+          await _refreshVisibleSolvedStatuses();
+        }
       },
       child: Container(
         padding: const EdgeInsets.all(18),
@@ -742,11 +799,34 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                const Spacer(),
-
+                Expanded(
+                  child: question['isSolved'] == true
+                      ? const Center(
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.check_circle_rounded,
+                                color: Color(0xFF16A34A),
+                                size: 14,
+                              ),
+                              SizedBox(width: 5),
+                              Text(
+                                'Solved',
+                                style: TextStyle(
+                                  color: Color(0xFF15803D),
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 11,
+                    horizontal: 9,
                     vertical: 7,
                   ),
                   decoration: BoxDecoration(
@@ -813,22 +893,22 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
 
-                const Text(
-                  'Solve',
-                  style: TextStyle(
-                    color: Color(0xFF4F46E5),
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
+                if (question['isSolved'] == true) ...[
+                  const Icon(
+                    Icons.check_rounded,
+                    size: 15,
+                    color: Color(0xFF15803D),
                   ),
-                ),
-
-                const SizedBox(width: 6),
-
-                const Icon(
-                  Icons.arrow_forward_ios_rounded,
-                  size: 12,
-                  color: Color(0xFF4F46E5),
-                ),
+                  const SizedBox(width: 4),
+                  const Text(
+                    'Completed',
+                    style: TextStyle(
+                      color: Color(0xFF15803D),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
               ],
             ),
           ],
@@ -843,7 +923,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildEmptyState() {
     final message = _questions.isEmpty
-        ? 'You have no unsolved questions available right now.'
+        ? 'No questions match your current filters or search.'
         : 'Try another search or change your filters.';
 
     return Padding(
@@ -912,8 +992,7 @@ class _HomeScreenState extends State<HomeScreen> {
   void _showFilterSheet() {
     String tempDifficulty = _selectedDifficulty;
     String tempTopic = _selectedTopic;
-
-    final topics = _availableTopics;
+    String tempStatus = _selectedStatus;
 
     showModalBottomSheet(
       context: context,
@@ -924,10 +1003,8 @@ class _HomeScreenState extends State<HomeScreen> {
           builder: (context, setSheetState) {
             return Container(
               padding: EdgeInsets.fromLTRB(
-                20,
-                20,
-                20,
-                MediaQuery.of(context).viewInsets.bottom + 25,
+                20, 20, 20,
+                MediaQuery.of(context).viewInsets.bottom + 24,
               ),
               decoration: const BoxDecoration(
                 color: Colors.white,
@@ -935,133 +1012,59 @@ class _HomeScreenState extends State<HomeScreen> {
                   top: Radius.circular(26),
                 ),
               ),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Filter Questions',
-                      style: TextStyle(
-                        color: Color(0xFF171923),
-                        fontSize: 21,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    const Text(
-                      'Difficulty',
-                      style: TextStyle(
-                        color: Color(0xFF353743),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: ['All', 'Easy', 'Medium', 'Hard']
-                          .map(
-                            (difficulty) => _filterChip(
-                              label: difficulty,
-                              selected:
-                                  tempDifficulty == difficulty,
-                              onTap: () {
-                                setSheetState(() {
-                                  tempDifficulty = difficulty;
-                                });
-                              },
-                            ),
-                          )
-                          .toList(),
-                    ),
-
-                    const SizedBox(height: 24),
-
-                    const Text(
-                      'Topic',
-                      style: TextStyle(
-                        color: Color(0xFF353743),
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-
-                    const SizedBox(height: 10),
-
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF7F8FC),
-                        borderRadius: BorderRadius.circular(13),
-                        border: Border.all(
-                          color: const Color(0xFFE3E4EA),
-                        ),
-                      ),
-                      child: DropdownButtonHideUnderline(
-                        child: DropdownButton<String>(
-                          value: topics.contains(tempTopic)
-                              ? tempTopic
-                              : 'All',
-                          isExpanded: true,
-                          items: topics.map((topic) {
-                            return DropdownMenuItem<String>(
-                              value: topic,
-                              child: Text(
-                                topic == 'All' ? 'All Topics' : topic,
-                              ),
-                            );
-                          }).toList(),
-                          onChanged: (value) {
-                            if (value != null) {
-                              setSheetState(() {
-                                tempTopic = value;
-                              });
-                            }
-                          },
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 26),
-
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          setState(() {
-                            _selectedDifficulty = tempDifficulty;
-                            _selectedTopic = tempTopic;
-                          });
-
-                          Navigator.pop(sheetContext);
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      HomeFilterWidget(
+                        topics: Topics.all,
+                        selectedTopic: tempTopic,
+                        selectedDifficulty: tempDifficulty,
+                        selectedStatus: tempStatus,
+                        onTopicChanged: (value) {
+                          setSheetState(() => tempTopic = value);
                         },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF4F46E5),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14),
+                        onDifficultyChanged: (value) {
+                          setSheetState(() => tempDifficulty = value);
+                        },
+                        onStatusChanged: (value) {
+                          setSheetState(() => tempStatus = value);
+                        },
+                      ),
+                      const SizedBox(height: 18),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            setState(() {
+                              _selectedTopic = tempTopic;
+                              _selectedDifficulty = tempDifficulty;
+                              _selectedStatus = tempStatus;
+                            });
+                            Navigator.pop(sheetContext);
+                            _loadRandomUnsolvedQuestions();
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF4F46E5),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(13),
+                            ),
                           ),
-                        ),
-                        child: const Text(
-                          'Apply Filters',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w700,
+                          child: const Text(
+                            'Apply Filters',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             );

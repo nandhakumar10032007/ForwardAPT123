@@ -2,15 +2,14 @@
 import '../answer_type.dart';
 
 class AnswerTypeService {
-
   // Integer: -5 or 5
   static final RegExp _integerRegex = RegExp(
     r'^[+-]?\d+$',
   );
 
-  // Percentage: 5% or 12.5%
+  // Percentage: 5%, 12.5%, -5%, +12.5%
   static final RegExp _percentageRegex = RegExp(
-    r'^[+-]?\d+(?:\.\d+)?%$',
+    r'^[+-]?\d+(?:\.\d+)?\s*%$',
   );
 
   // Ratio: 2:3, 2:3:4, 2:3:4:5 or more terms
@@ -28,10 +27,10 @@ class AnswerTypeService {
     r'^[+-]?\d+\s*/\s*[+-]?\d+$',
   );
 
- // Mixed fraction: 10-5/6
-static final RegExp _mixedFractionRegex = RegExp(
-  r'^[+-]?\d+-\s*\d+\s*/\s*[+-]?\d+$',
-);
+  // Mixed fraction: 10-5/6
+  static final RegExp _mixedFractionRegex = RegExp(
+    r'^[+-]?\d+-\s*\d+\s*/\s*[+-]?\d+$',
+  );
 
   // Exponential: 2^3
   static final RegExp _exponentialRegex = RegExp(
@@ -43,9 +42,7 @@ static final RegExp _mixedFractionRegex = RegExp(
     r'^(?:\d+(?:\.\d+)?\s*)?√\s*\d+(?:\.\d+)?$',
   );
 
-  /// Detects the answer type automatically.
-  ///
-  /// Returns null if the answer does not match any supported format.
+  /// Automatically detects the answer format.
   static String? detect(String answer) {
     final value = answer.trim();
 
@@ -103,12 +100,12 @@ static final RegExp _mixedFractionRegex = RegExp(
     return denominator != null && denominator != 0;
   }
 
-  /// Validates an answer against its detected format.
+  /// Validates the answer format.
   static bool isValid(String answer) {
     return detect(answer) != null;
   }
 
-  /// Validates an answer against an expected answer type.
+  /// Validates the answer against the expected type.
   static bool validate({
     required String answer,
     required String expectedType,

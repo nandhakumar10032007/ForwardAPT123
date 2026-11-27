@@ -478,13 +478,12 @@ class DailyQuestionSubmissionService {
   bool _isValidFraction(String value) {
     final match = RegExp(
       r'^([+-]?\d+)\s*/\s*(\d+)$',
-    ).firstMatch(value);
+    ).firstMatch(value.trim());
 
     if (match == null) return false;
 
-    final denominator = int.tryParse(match.group(2)!);
-
-    return denominator != null && denominator != 0;
+    final denominator = BigInt.tryParse(match.group(2)!);
+    return denominator != null && denominator != BigInt.zero;
   }
 
   // ============================================================
@@ -512,18 +511,28 @@ class DailyQuestionSubmissionService {
   // ============================================================
 
   bool _isValidRatio(String value) {
-    final match = RegExp(
-      r'^(\d+)\s*:\s*(\d+)$',
-    ).firstMatch(value);
+    final parts = value.trim().split(':');
 
-    if (match == null) return false;
+    // A ratio must contain at least two integer terms.
+    if (parts.length < 2) return false;
 
-    final first = int.tryParse(match.group(1)!);
-    final second = int.tryParse(match.group(2)!);
+    var hasNonZeroTerm = false;
 
-    return first != null &&
-        second != null &&
-        (first != 0 || second != 0);
+    for (final part in parts) {
+      final term = part.trim();
+
+      if (!RegExp(r'^\d+$').hasMatch(term)) return false;
+
+      final number = BigInt.tryParse(term);
+      if (number == null) return false;
+
+      if (number != BigInt.zero) {
+        hasNonZeroTerm = true;
+      }
+    }
+
+    // Reject only an all-zero ratio at format-validation stage.
+    return hasNonZeroTerm;
   }
 
   // ============================================================
@@ -643,12 +652,50 @@ class DailyQuestionSubmissionService {
   }
 
   bool _compareFractions(String a, String b) {
-    final first = _fractionValue(a);
-    final second = _fractionValue(b);
+    final submitted = _fractionParts(a);
+    final correct = _fractionParts(b);
 
-    if (first == null || second == null) return false;
+    if (submitted == null || correct == null) return false;
 
-    return (first - second).abs() < _epsilon;
+    // Only the submitted answer must be in simplest form.
+    if (_gcd(submitted.$1.abs(), submitted.$2) != BigInt.one) {
+      return false;
+    }
+
+    return submitted.$1 * correct.$2 ==
+        correct.$1 * submitted.$2;
+  }
+
+  (BigInt, BigInt)? _fractionParts(String value) {
+    final match = RegExp(
+      r'^([+-]?\d+)\s*/\s*(\d+)$',
+    ).firstMatch(value.trim());
+
+    if (match == null) return null;
+
+    final numerator = BigInt.tryParse(match.group(1)!);
+    final denominator = BigInt.tryParse(match.group(2)!);
+
+    if (numerator == null ||
+        denominator == null ||
+        denominator == BigInt.zero) {
+      return null;
+    }
+
+    return (numerator, denominator);
+  }
+
+  BigInt _gcd(BigInt a, BigInt b) {
+    var x = a;
+    var y = b;
+
+    while (y != BigInt.zero) {
+      final remainder = x % y;
+      x = y;
+      y = remainder;
+    }
+
+    return x;
   }
 
   bool _compareFractionsOrMixed(String a, String b) {
@@ -664,29 +711,68 @@ class DailyQuestionSubmissionService {
   // RATIO COMPARISON
   // ============================================================
 
-  List<int>? _ratioParts(String value) {
-    final match = RegExp(
-      r'^(\d+)\s*:\s*(\d+)$',
-    ).firstMatch(value.trim());
+  List<BigInt>? _ratioParts(String value) {
+    final parts = value.trim().split(':');
+    if (parts.length < 2) return null;
 
-    if (match == null) return null;
+    final numbers = <BigInt>[];
 
-    final first = int.tryParse(match.group(1)!);
-    final second = int.tryParse(match.group(2)!);
+    for (final part in parts) {
+      final term = part.trim();
 
-    if (first == null || second == null) return null;
+      if (!RegExp(r'^\d+$').hasMatch(term)) return null;
 
-    return [first, second];
+      final number = BigInt.tryParse(term);
+      if (number == null) return null;
+
+      numbers.add(number);
+    }
+
+    if (!numbers.any((number) => number != BigInt.zero)) {
+      return null;
+    }
+
+    return numbers;
   }
 
   bool _compareRatios(String a, String b) {
-    final first = _ratioParts(a);
-    final second = _ratioParts(b);
+    final submitted = _ratioParts(a);
+    final correct = _ratioParts(b);
 
-    if (first == null || second == null) return false;
+    if (submitted == null || correct == null) return false;
+    if (submitted.length != correct.length) return false;
 
-    return first[0] * second[1] ==
-        first[1] * second[0];
+    // The student's submitted ratio must already be in simplest form.
+    final submittedGcd = _gcdOfRatio(submitted);
+    if (submittedGcd != BigInt.one) return false;
+
+    // Reduce the stored correct ratio too, so its database formatting
+    // does not affect whether the student's answer is mathematically right.
+    final correctGcd = _gcdOfRatio(correct);
+
+    final reducedCorrect = correct
+        .map((term) => term ~/ correctGcd)
+        .toList();
+
+    // Both lists now have the same number of terms and are reduced.
+    for (var i = 0; i < submitted.length; i++) {
+      if (submitted[i] != reducedCorrect[i]) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  BigInt _gcdOfRatio(List<BigInt> terms) {
+    var result = BigInt.zero;
+
+    for (final term in terms) {
+      result = _gcd(result, term);
+      if (result == BigInt.one) break;
+    }
+
+    return result;
   }
 
   // ============================================================

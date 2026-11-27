@@ -54,7 +54,9 @@ class _QuestionDetailedViewScreenState
 
   DocumentReference<Map<String, dynamic>> get _questionReference =>
       FirebaseFirestore.instance
-          .collection('commonQuestions')
+          .collection('Common_questions')
+          .doc(widget.topic ?? '')
+          .collection('questions')
           .doc(widget.questionId);
 
   DocumentReference<Map<String, dynamic>>? get _solvedReference {
@@ -62,10 +64,15 @@ class _QuestionDetailedViewScreenState
 
     if (user == null) return null;
 
+    final topic = widget.topic?.trim() ?? '';
+    if (topic.isEmpty) return null;
+
     return FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
-        .collection('solvedQuestions')
+        .collection('solved')
+        .doc(topic)
+        .collection('questions')
         .doc(widget.questionId);
   }
 
@@ -187,6 +194,7 @@ class _QuestionDetailedViewScreenState
     try {
       final result = await _answerService.submitAnswer(
         questionId: widget.questionId,
+        topic: widget.topic ?? '',
         submittedAnswer: submittedAnswer,
       );
 

@@ -577,6 +577,27 @@ class ContestSubmitService {
     final normalizedType = _normalizeAnswerType(answerType);
     if (normalizedType.isEmpty) return false;
 
+    if (normalizedType == AnswerType.ratio) {
+      final parts = answer.trim().split(':');
+      if (parts.length < 2) return false;
+
+      var hasNonZeroTerm = false;
+
+      for (final part in parts) {
+        final term = part.trim();
+        if (!RegExp(r'^\d+$').hasMatch(term)) return false;
+
+        final number = BigInt.tryParse(term);
+        if (number == null) return false;
+
+        if (number != BigInt.zero) {
+          hasNonZeroTerm = true;
+        }
+      }
+
+      return hasNonZeroTerm;
+    }
+
     return AnswerTypeService.validate(
       answer: answer,
       expectedType: normalizedType,
@@ -657,12 +678,55 @@ class ContestSubmitService {
   }
 
   bool _compareFractions(String a, String b) {
-    final first = _fractionValue(a);
-    final second = _fractionValue(b);
+    final submitted = _fractionParts(a);
+    final correct = _fractionParts(b);
 
-    if (first == null || second == null) return false;
+    if (submitted == null || correct == null) return false;
 
-    return (first - second).abs() < 0.0000001;
+    final submittedNumerator = submitted.$1;
+    final submittedDenominator = submitted.$2;
+    final correctNumerator = correct.$1;
+    final correctDenominator = correct.$2;
+
+    if (_gcd(submittedNumerator.abs(), submittedDenominator) !=
+        BigInt.one) {
+      return false;
+    }
+
+    return submittedNumerator * correctDenominator ==
+        correctNumerator * submittedDenominator;
+  }
+
+  (BigInt, BigInt)? _fractionParts(String value) {
+    final match = RegExp(
+      r'^([+-]?\d+)\s*/\s*(\d+)$',
+    ).firstMatch(value.trim());
+
+    if (match == null) return null;
+
+    final numerator = BigInt.tryParse(match.group(1)!);
+    final denominator = BigInt.tryParse(match.group(2)!);
+
+    if (numerator == null ||
+        denominator == null ||
+        denominator == BigInt.zero) {
+      return null;
+    }
+
+    return (numerator, denominator);
+  }
+
+  BigInt _gcd(BigInt a, BigInt b) {
+    var x = a;
+    var y = b;
+
+    while (y != BigInt.zero) {
+      final remainder = x % y;
+      x = y;
+      y = remainder;
+    }
+
+    return x;
   }
 
   double? _mixedFractionValue(String value) {
@@ -705,29 +769,60 @@ class ContestSubmitService {
     return (first - second).abs() < 0.0000001;
   }
 
-  List<int>? _ratioParts(String value) {
-    final match = RegExp(
-      r'^(\d+)\s*:\s*(\d+)$',
-    ).firstMatch(value.trim());
+  List<BigInt>? _ratioParts(String value) {
+    final parts = value.trim().split(':');
+    if (parts.length < 2) return null;
 
-    if (match == null) return null;
+    final numbers = <BigInt>[];
 
-    final first = int.tryParse(match.group(1)!);
-    final second = int.tryParse(match.group(2)!);
+    for (final part in parts) {
+      final term = part.trim();
+      if (!RegExp(r'^\d+$').hasMatch(term)) return null;
 
-    if (first == null || second == null) return null;
+      final number = BigInt.tryParse(term);
+      if (number == null) return null;
 
-    return [first, second];
+      numbers.add(number);
+    }
+
+    if (!numbers.any((number) => number != BigInt.zero)) {
+      return null;
+    }
+
+    return numbers;
   }
 
   bool _compareRatios(String a, String b) {
-    final first = _ratioParts(a);
-    final second = _ratioParts(b);
+    final submitted = _ratioParts(a);
+    final correct = _ratioParts(b);
 
-    if (first == null || second == null) return false;
+    if (submitted == null || correct == null) return false;
+    if (submitted.length != correct.length) return false;
 
-    return first[0] * second[1] ==
-        first[1] * second[0];
+    final submittedGcd = _gcdOfRatio(submitted);
+    if (submittedGcd != BigInt.one) return false;
+
+    final correctGcd = _gcdOfRatio(correct);
+    final reducedCorrect = correct
+        .map((term) => term ~/ correctGcd)
+        .toList();
+
+    for (var i = 0; i < submitted.length; i++) {
+      if (submitted[i] != reducedCorrect[i]) return false;
+    }
+
+    return true;
+  }
+
+  BigInt _gcdOfRatio(List<BigInt> terms) {
+    var result = BigInt.zero;
+
+    for (final term in terms) {
+      result = _gcd(result, term);
+      if (result == BigInt.one) break;
+    }
+
+    return result;
   }
 
   double? _exponentValue(String value) {
